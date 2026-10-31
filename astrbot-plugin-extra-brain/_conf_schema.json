@@ -1,0 +1,58 @@
+{
+    "backend": {
+        "type": "string",
+        "description": "记忆库后端模式",
+        "options": ["local", "http"],
+        "default": "local",
+        "hint": "local: 进程内直连 extra_brain 库（推荐，零额外部署，改代码重启即生效）；http: 调用 extra_brain.server sidecar（记忆库独立部署时用）"
+    },
+    "extra_brain_src_path": {
+        "type": "string",
+        "description": "extra_brain 源码 src 目录（仅 local 后端）",
+        "default": "",
+        "hint": "例如 D:/projects/small_fat_fish/src。留空则使用 pip 安装的 extra-brain 包。开发期指向仓库 src/ 可直接调试记忆库代码"
+    },
+    "data_dir": {
+        "type": "string",
+        "description": "记忆库数据目录（仅 local 后端）",
+        "default": "data/extra_brain",
+        "hint": "每个 peer 一个 SQLite 文件。相对路径按 AstrBot 启动目录解析，建议用绝对路径"
+    },
+    "base_url": {
+        "type": "string",
+        "description": "sidecar 服务地址（仅 http 后端）",
+        "default": "http://127.0.0.1:8756",
+        "hint": "extra_brain.server 的监听地址"
+    },
+    "peer_scope": {
+        "type": "string",
+        "description": "peer 记忆库粒度",
+        "options": ["auto", "full_umo"],
+        "default": "auto",
+        "hint": "auto: webchat 按用户（跨对话共享记忆），QQ 私聊按人、群聊按群；full_umo: 严格按完整会话源隔离（webchat 每个对话独立，不推荐）"
+    },
+    "inject_enabled": {
+        "type": "bool",
+        "description": "启用每轮记忆注入",
+        "default": true,
+        "hint": "关闭后仅积累记忆，不注入模型上下文"
+    },
+    "consolidate_every": {
+        "type": "int",
+        "description": "累计多少轮对话后自动巩固（1 = 每轮）",
+        "default": 8,
+        "hint": "IM 没有会话结束概念；可随时用 /memory consolidate 手动巩固剩余消息"
+    },
+    "context_turns": {
+        "type": "int",
+        "description": "注入检索时携带的近期对话轮数",
+        "default": 5,
+        "hint": "用于给检索提供上下文，提升相关性"
+    },
+    "token_limit": {
+        "type": "int",
+        "description": "注入 token 预算上限（0 = 使用记忆库默认 1800）",
+        "default": 0,
+        "hint": "含完整 Core Memory 与检索到的语义/情节记忆"
+    }
+}

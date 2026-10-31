@@ -1,0 +1,7 @@
+# dsh-plugin-extra-brain bundle patch.
+#
+# 这一行 insert 把包的 main 入口（index.js）加载为 host 半身 —— 一个普通 Cordis
+# 插件。没有 dsh.client 声明，因此没有浏览器半身。
+- insert:
+    - id: extra-brain
+      name: dsh-plugin-extra-brain

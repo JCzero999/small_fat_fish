@@ -1,0 +1,28 @@
+{
+  "name": "dsh-plugin-extra-brain",
+  "version": "0.1.0",
+  "description": "DSH/Cordis plugin bridging the extra_brain Python memory sidecar (inject + consolidate).",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./sidecar": "./sidecar.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "sidecar.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "smoke": "node scripts/bridge-smoke.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

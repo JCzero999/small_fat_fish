@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+build/
+dist/
+*.db
+*.db-shm
+*.db-wal
+memory_context.txt
+conversation.txt
+
+# sidecar 数据目录（per-peer 记忆库）
+extra-brain/
+
+# DSH 插件
+dsh-plugin-extra-brain/node_modules/
+
+# AstrBot runtime config (contains secrets: passwords, API keys)
+data/cmd_config.json

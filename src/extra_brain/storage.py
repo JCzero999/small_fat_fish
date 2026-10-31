@@ -1,0 +1,467 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Iterable
+from uuid import uuid4
+
+from .embeddings import VectorEntry
+from .models import (
+    CoreMemory,
+    EpisodicMemory,
+    Memory,
+    SemanticMemory,
+    StyleMemory,
+    to_iso8601,
+    utc_now,
+)
+
+
+@dataclass(slots=True)
+class WriteBatch:
+    core: CoreMemory | None = None
+    semantic: list[SemanticMemory] = field(default_factory=list)
+    episodic: list[EpisodicMemory] = field(default_factory=list)
+    style: list[StyleMemory] = field(default_factory=list)
+    vectors: dict[str, VectorEntry] = field(default_factory=dict)
+    operation: str = "write_batch"
+    transaction_id: str = field(default_factory=lambda: uuid4().hex)
+    audit_details: dict[str, Any] | None = None
+
+
+class MemoryStore:
+    """SQLite persistence. A batch, its vectors, and its audit records commit together."""
+
+    def __init__(self, path: str | Path, *, core_token_limit: int = 1200) -> None:
+        self.path = str(path)
+        self.core_token_limit = core_token_limit
+        self._lock = threading.RLock()
+        self._connection = sqlite3.connect(self.path, check_same_thread=False)
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute("PRAGMA foreign_keys = ON")
+        self._connection.execute("PRAGMA busy_timeout = 5000")
+        if self.path != ":memory:":
+            self._connection.execute("PRAGMA journal_mode = WAL")
+        self._initialize()
+
+    def _initialize(self) -> None:
+        with self._connection:
+            self._connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS core_memory (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    data TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS semantic_memories (
+                    id TEXT PRIMARY KEY,
+                    subject TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    importance REAL NOT NULL,
+                    confidence REAL NOT NULL,
+                    decay_score REAL NOT NULL,
+                    protected INTEGER NOT NULL,
+                    archived INTEGER NOT NULL,
+                    last_activated TEXT NOT NULL,
+                    data TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_semantic_retrieval
+                    ON semantic_memories(archived, decay_score, importance);
+                CREATE INDEX IF NOT EXISTS idx_semantic_conflict
+                    ON semantic_memories(subject, predicate);
+
+                CREATE TABLE IF NOT EXISTS episodic_memories (
+                    id TEXT PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    importance REAL NOT NULL,
+                    decay_score REAL NOT NULL,
+                    protected INTEGER NOT NULL,
+                    archived INTEGER NOT NULL,
+                    last_activated TEXT,
+                    data TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_episodic_retrieval
+                    ON episodic_memories(archived, decay_score, importance);
+
+                CREATE TABLE IF NOT EXISTS style_memories (
+                    id TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,
+                    importance REAL NOT NULL,
+                    last_observed TEXT NOT NULL,
+                    data TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS memory_vectors (
+                    memory_id TEXT PRIMARY KEY,
+                    memory_type TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    dimensions INTEGER NOT NULL,
+                    values_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_vector_lookup
+                    ON memory_vectors(memory_type, model, dimensions);
+
+                CREATE TABLE IF NOT EXISTS operation_log (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    transaction_id TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    before_json TEXT,
+                    after_json TEXT,
+                    details_json TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_operation_entity
+                    ON operation_log(entity_type, entity_id, sequence);
+                """
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            self._connection.close()
+
+    def __enter__(self) -> MemoryStore:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def get_core(self) -> CoreMemory:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM core_memory WHERE singleton = 1"
+            ).fetchone()
+        return CoreMemory.from_dict(json.loads(row["data"])) if row else CoreMemory()
+
+    def save_core(self, core: CoreMemory) -> None:
+        self.apply_batch(WriteBatch(core=core, operation="core.write"))
+
+    def get_semantic(self, memory_id: str) -> SemanticMemory | None:
+        row = self._connection.execute(
+            "SELECT data FROM semantic_memories WHERE id = ?", (memory_id,)
+        ).fetchone()
+        return SemanticMemory.from_dict(json.loads(row["data"])) if row else None
+
+    def get_episodic(self, memory_id: str) -> EpisodicMemory | None:
+        row = self._connection.execute(
+            "SELECT data FROM episodic_memories WHERE id = ?", (memory_id,)
+        ).fetchone()
+        return EpisodicMemory.from_dict(json.loads(row["data"])) if row else None
+
+    def get_memory(self, memory_id: str) -> Memory | None:
+        return self.get_semantic(memory_id) or self.get_episodic(memory_id)
+
+    def save_semantic(self, memory: SemanticMemory, *, vector: VectorEntry | None = None) -> None:
+        vectors = {memory.id: vector} if vector else {}
+        self.apply_batch(
+            WriteBatch(semantic=[memory], vectors=vectors, operation="semantic.write")
+        )
+
+    def save_episodic(self, memory: EpisodicMemory, *, vector: VectorEntry | None = None) -> None:
+        vectors = {memory.id: vector} if vector else {}
+        self.apply_batch(
+            WriteBatch(episodic=[memory], vectors=vectors, operation="episodic.write")
+        )
+
+    def save_style(self, memory: StyleMemory) -> None:
+        self.apply_batch(WriteBatch(style=[memory], operation="style.write"))
+
+    def list_semantic(self, *, include_archived: bool = False) -> list[SemanticMemory]:
+        query = "SELECT data FROM semantic_memories"
+        if not include_archived:
+            query += " WHERE archived = 0"
+        query += " ORDER BY id"
+        with self._lock:
+            rows = self._connection.execute(query).fetchall()
+        memories = [SemanticMemory.from_dict(json.loads(row["data"])) for row in rows]
+        return sorted(memories, key=lambda item: (item.created_at, item.id))
+
+    def list_episodic(self, *, include_archived: bool = False) -> list[EpisodicMemory]:
+        query = "SELECT data FROM episodic_memories"
+        if not include_archived:
+            query += " WHERE archived = 0"
+        query += " ORDER BY id"
+        with self._lock:
+            rows = self._connection.execute(query).fetchall()
+        memories = [EpisodicMemory.from_dict(json.loads(row["data"])) for row in rows]
+        return sorted(memories, key=lambda item: (item.timestamp, item.id))
+
+    def list_style(self) -> list[StyleMemory]:
+        with self._lock:
+            rows = self._connection.execute("SELECT data FROM style_memories ORDER BY id").fetchall()
+        return [StyleMemory.from_dict(json.loads(row["data"])) for row in rows]
+
+    def get_vectors(
+        self, memory_type: str, *, model: str, dimensions: int
+    ) -> dict[str, tuple[float, ...]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT memory_id, values_json FROM memory_vectors
+                WHERE memory_type = ? AND model = ? AND dimensions = ?
+                """,
+                (memory_type, model, dimensions),
+            ).fetchall()
+        return {
+            row["memory_id"]: tuple(float(value) for value in json.loads(row["values_json"]))
+            for row in rows
+        }
+
+    def apply_batch(self, batch: WriteBatch) -> None:
+        if batch.core is not None:
+            batch.core.validate_size(self.core_token_limit)
+        with self._lock, self._connection:
+            if batch.core is not None:
+                before_row = self._connection.execute(
+                    "SELECT data FROM core_memory WHERE singleton = 1"
+                ).fetchone()
+                data = _to_json(batch.core.to_dict())
+                self._connection.execute(
+                    """
+                    INSERT INTO core_memory(singleton, data) VALUES (1, ?)
+                    ON CONFLICT(singleton) DO UPDATE SET data = excluded.data
+                    """,
+                    (data,),
+                )
+                self._audit(
+                    batch,
+                    "core",
+                    "core",
+                    before_row["data"] if before_row else None,
+                    data,
+                )
+
+            for memory in batch.semantic:
+                self._write_semantic(batch, memory)
+            for memory in batch.episodic:
+                self._write_episodic(batch, memory)
+            for memory in batch.style:
+                self._write_style(batch, memory)
+            for entry in batch.vectors.values():
+                self._write_vector(entry)
+
+            if batch.audit_details is not None:
+                self._audit(
+                    batch,
+                    "consolidation",
+                    batch.transaction_id,
+                    None,
+                    None,
+                    _to_json(batch.audit_details),
+                )
+
+    def _write_semantic(self, batch: WriteBatch, memory: SemanticMemory) -> None:
+        before = self._connection.execute(
+            "SELECT data FROM semantic_memories WHERE id = ?", (memory.id,)
+        ).fetchone()
+        data = _to_json(memory.to_dict())
+        self._connection.execute(
+            """
+            INSERT INTO semantic_memories(
+                id, subject, predicate, importance, confidence, decay_score,
+                protected, archived, last_activated, data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                subject = excluded.subject,
+                predicate = excluded.predicate,
+                importance = excluded.importance,
+                confidence = excluded.confidence,
+                decay_score = excluded.decay_score,
+                protected = excluded.protected,
+                archived = excluded.archived,
+                last_activated = excluded.last_activated,
+                data = excluded.data
+            """,
+            (
+                memory.id,
+                memory.subject,
+                memory.predicate,
+                memory.importance,
+                memory.confidence,
+                memory.decay_score,
+                int(memory.protected),
+                int(memory.archived),
+                memory.last_activated,
+                data,
+            ),
+        )
+        self._audit(batch, "semantic", memory.id, before["data"] if before else None, data)
+
+    def _write_episodic(self, batch: WriteBatch, memory: EpisodicMemory) -> None:
+        before = self._connection.execute(
+            "SELECT data FROM episodic_memories WHERE id = ?", (memory.id,)
+        ).fetchone()
+        data = _to_json(memory.to_dict())
+        self._connection.execute(
+            """
+            INSERT INTO episodic_memories(
+                id, timestamp, importance, decay_score, protected, archived,
+                last_activated, data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                timestamp = excluded.timestamp,
+                importance = excluded.importance,
+                decay_score = excluded.decay_score,
+                protected = excluded.protected,
+                archived = excluded.archived,
+                last_activated = excluded.last_activated,
+                data = excluded.data
+            """,
+            (
+                memory.id,
+                memory.timestamp,
+                memory.importance,
+                memory.decay_score,
+                int(memory.protected),
+                int(memory.archived),
+                memory.last_activated,
+                data,
+            ),
+        )
+        self._audit(batch, "episodic", memory.id, before["data"] if before else None, data)
+
+    def _write_style(self, batch: WriteBatch, memory: StyleMemory) -> None:
+        before = self._connection.execute(
+            "SELECT data FROM style_memories WHERE id = ?", (memory.id,)
+        ).fetchone()
+        data = _to_json(memory.to_dict())
+        self._connection.execute(
+            """
+            INSERT INTO style_memories(id, category, importance, last_observed, data)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                category = excluded.category,
+                importance = excluded.importance,
+                last_observed = excluded.last_observed,
+                data = excluded.data
+            """,
+            (memory.id, memory.category, memory.importance, memory.last_observed, data),
+        )
+        self._audit(batch, "style", memory.id, before["data"] if before else None, data)
+
+    def _write_vector(self, entry: VectorEntry) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO memory_vectors(memory_id, memory_type, model, dimensions, values_json)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(memory_id) DO UPDATE SET
+                memory_type = excluded.memory_type,
+                model = excluded.model,
+                dimensions = excluded.dimensions,
+                values_json = excluded.values_json
+            """,
+            (
+                entry.memory_id,
+                entry.memory_type,
+                entry.model,
+                entry.dimensions,
+                json.dumps(entry.values, separators=(",", ":")),
+            ),
+        )
+
+    def _audit(
+        self,
+        batch: WriteBatch,
+        entity_type: str,
+        entity_id: str,
+        before_json: str | None,
+        after_json: str | None,
+        details_json: str | None = None,
+    ) -> None:
+        operation = batch.operation
+        if before_json is None and after_json is not None:
+            operation += ".create"
+        elif before_json is not None and after_json is not None:
+            operation += ".update"
+        self._connection.execute(
+            """
+            INSERT INTO operation_log(
+                timestamp, transaction_id, operation, entity_type, entity_id,
+                before_json, after_json, details_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                to_iso8601(utc_now()),
+                batch.transaction_id,
+                operation,
+                entity_type,
+                entity_id,
+                before_json,
+                after_json,
+                details_json,
+            ),
+        )
+
+    def record_activations(self, memory_ids: Iterable[str], *, now: datetime) -> None:
+        ids = list(dict.fromkeys(memory_ids))
+        if not ids:
+            return
+        batch = WriteBatch(operation="memory.activate")
+        for memory_id in ids:
+            memory = self.get_memory(memory_id)
+            if memory is None or memory.archived:
+                continue
+            memory.activation_count += 1
+            memory.last_activated = to_iso8601(now)
+            if memory.protected:
+                memory.decay_score = 1.0
+            if isinstance(memory, SemanticMemory):
+                batch.semantic.append(memory)
+            else:
+                batch.episodic.append(memory)
+        self.apply_batch(batch)
+
+    def set_protected(self, memory_id: str, protected: bool = True) -> None:
+        memory = self.get_memory(memory_id)
+        if memory is None:
+            raise KeyError(memory_id)
+        core = self.get_core()
+        protected_ids = [item for item in core.protected_memories if item != memory_id]
+        if protected:
+            protected_ids.append(memory_id)
+        core.protected_memories = protected_ids
+        core.last_updated = to_iso8601(utc_now())
+        core.validate_size(self.core_token_limit)
+        memory.protected = protected
+        if protected:
+            memory.decay_score = 1.0
+        batch = WriteBatch(core=core, operation="memory.protect")
+        if isinstance(memory, SemanticMemory):
+            batch.semantic.append(memory)
+        else:
+            batch.episodic.append(memory)
+        self.apply_batch(batch)
+
+    def list_audit(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM operation_log ORDER BY sequence DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "sequence": row["sequence"],
+                "timestamp": row["timestamp"],
+                "transaction_id": row["transaction_id"],
+                "operation": row["operation"],
+                "entity_type": row["entity_type"],
+                "entity_id": row["entity_id"],
+                "before": json.loads(row["before_json"]) if row["before_json"] else None,
+                "after": json.loads(row["after_json"]) if row["after_json"] else None,
+                "details": json.loads(row["details_json"]) if row["details_json"] else None,
+            }
+            for row in rows
+        ]
+
+
+def _to_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
