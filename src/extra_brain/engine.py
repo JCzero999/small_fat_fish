@@ -85,9 +85,14 @@ class ExtraBrain:
         recent_context: Sequence[str] = (),
         entities: Sequence[str] = (),
         now: datetime | None = None,
+        as_of: str | None = None,
     ) -> RetrievalResult:
         return self.retriever.search(
-            query, recent_context=recent_context, entities=entities, now=now
+            query,
+            recent_context=recent_context,
+            entities=entities,
+            now=now,
+            as_of=as_of,
         )
 
     def build_injection(

@@ -27,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     core = commands.add_parser("core", help="读取 Core，或从 JSON 文件完整替换 Core")
     core.add_argument("--file", type=Path, help="符合 Core schema 的 JSON 文件")
+    core.add_argument(
+        "--rollback",
+        metavar="REVISION",
+        help="将人格锚回滚到指定版本（REVISION 为 persona_anchor_history 中的版本 ID）",
+    )
 
     consolidate = commands.add_parser("consolidate", help="使用 DeepSeek 深度抽取并巩固对话")
     consolidate.add_argument("file", type=Path, help="UTF-8 对话文本文件")
@@ -82,6 +87,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.file:
                 data = json.loads(args.file.read_text(encoding="utf-8"))
                 brain.save_core(CoreMemory.from_dict(data))
+            elif args.rollback:
+                core = brain.core
+                revision = args.rollback
+                history = list(core.persona_anchor_history)
+                matches = [h for h in history if h.get("version") == revision]
+                if not matches:
+                    print(
+                        f"extra-brain: persona_anchor_history 中未找到版本 {revision!r}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                entry = matches[-1]
+                core.persona_anchor_version = entry.get("version")
+                core.persona_anchor_history = history
+                core.last_updated = to_iso8601(utc_now())
+                brain.save_core(core)
             _print_json(brain.core.to_dict())
         elif args.command == "consolidate":
             conversation = args.file.read_text(encoding="utf-8")

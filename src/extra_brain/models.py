@@ -227,6 +227,9 @@ class CoreMemory:
     user_stable_profile: UserStableProfile = field(default_factory=UserStableProfile)
     active_threads: list[ActiveThread] = field(default_factory=list)
     protected_memories: list[str] = field(default_factory=list)
+    # --- 人格锚版本（v0.2.0） ---
+    persona_anchor_version: str | None = None       # 当前人格锚版本 ID
+    persona_anchor_history: list[dict[str, Any]] = field(default_factory=list)  # 历史版本，支持 rollback
 
     def __post_init__(self) -> None:
         self.version = _string(self.version, "version")
@@ -234,6 +237,11 @@ class CoreMemory:
         self.protected_memories = list(
             dict.fromkeys(_string_list(self.protected_memories, "protected_memories"))
         )
+        if self.persona_anchor_version is not None:
+            self.persona_anchor_version = _string(
+                self.persona_anchor_version, "core.persona_anchor_version"
+            )
+        self.persona_anchor_history = list(self.persona_anchor_history)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> CoreMemory:
@@ -249,6 +257,8 @@ class CoreMemory:
                 ActiveThread.from_dict(item) for item in data.get("active_threads", [])
             ],
             protected_memories=data.get("protected_memories", []),
+            persona_anchor_version=data.get("persona_anchor_version"),
+            persona_anchor_history=data.get("persona_anchor_history", []),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -259,6 +269,8 @@ class CoreMemory:
             "user_stable_profile": self.user_stable_profile.to_dict(),
             "active_threads": [thread.to_dict() for thread in self.active_threads],
             "protected_memories": list(self.protected_memories),
+            "persona_anchor_version": self.persona_anchor_version,
+            "persona_anchor_history": list(self.persona_anchor_history),
         }
 
     @property
@@ -293,6 +305,10 @@ class SemanticMemory:
     conflict_flag: bool = False
     protected: bool = False
     archived: bool = False
+    # --- 双时态版本链（v0.2.0） ---
+    valid_from: str | None = None      # 生效开始时间（ISO8601），None 表示创建时立即生效
+    valid_to: str | None = None        # 生效结束时间（ISO8601），None 表示持续有效
+    supersedes: str | None = None      # 被取代的记忆 ID，形成版本链
 
     def __post_init__(self) -> None:
         self.id = _string(self.id, "semantic.id")
@@ -323,6 +339,12 @@ class SemanticMemory:
         self.conflict_flag = _boolean(self.conflict_flag, "semantic.conflict_flag")
         self.protected = _boolean(self.protected, "semantic.protected")
         self.archived = _boolean(self.archived, "semantic.archived")
+        if self.valid_from is not None:
+            self.valid_from = _datetime_field(self.valid_from, "semantic.valid_from")
+        if self.valid_to is not None:
+            self.valid_to = _datetime_field(self.valid_to, "semantic.valid_to")
+        if self.supersedes is not None:
+            self.supersedes = _string(self.supersedes, "semantic.supersedes")
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SemanticMemory:
@@ -349,6 +371,9 @@ class SemanticMemory:
             conflict_flag=data.get("conflict_flag", False),
             protected=data.get("protected", False),
             archived=data.get("archived", False),
+            valid_from=data.get("valid_from"),
+            valid_to=data.get("valid_to"),
+            supersedes=data.get("supersedes"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -371,6 +396,9 @@ class SemanticMemory:
             "conflict_flag": self.conflict_flag,
             "protected": self.protected,
             "archived": self.archived,
+            "valid_from": self.valid_from,
+            "valid_to": self.valid_to,
+            "supersedes": self.supersedes,
         }
 
     def embedding_text(self) -> str:
@@ -393,6 +421,12 @@ class EpisodicMemory:
     last_activated: str | None = None
     activation_count: int = 0
     archived: bool = False
+    # --- 双时态版本链（v0.2.0） ---
+    valid_from: str | None = None
+    valid_to: str | None = None
+    supersedes: str | None = None
+    # --- 情感事件五态状态机（v0.2.0） ---
+    emotion_state: str | None = None  # open | acknowledged | attended | resolved | dormant
 
     def __post_init__(self) -> None:
         self.id = _string(self.id, "episodic.id")
@@ -415,6 +449,18 @@ class EpisodicMemory:
             )
         self.activation_count = _integer(self.activation_count, "episodic.activation_count")
         self.archived = _boolean(self.archived, "episodic.archived")
+        if self.valid_from is not None:
+            self.valid_from = _datetime_field(self.valid_from, "episodic.valid_from")
+        if self.valid_to is not None:
+            self.valid_to = _datetime_field(self.valid_to, "episodic.valid_to")
+        if self.supersedes is not None:
+            self.supersedes = _string(self.supersedes, "episodic.supersedes")
+        if self.emotion_state is not None:
+            self.emotion_state = _choice(
+                self.emotion_state,
+                "episodic.emotion_state",
+                ("open", "acknowledged", "attended", "resolved", "dormant"),
+            )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> EpisodicMemory:
@@ -444,6 +490,10 @@ class EpisodicMemory:
             last_activated=data.get("last_activated"),
             activation_count=data.get("activation_count", 0),
             archived=data.get("archived", False),
+            valid_from=data.get("valid_from"),
+            valid_to=data.get("valid_to"),
+            supersedes=data.get("supersedes"),
+            emotion_state=data.get("emotion_state"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -462,6 +512,10 @@ class EpisodicMemory:
             "last_activated": self.last_activated,
             "activation_count": self.activation_count,
             "archived": self.archived,
+            "valid_from": self.valid_from,
+            "valid_to": self.valid_to,
+            "supersedes": self.supersedes,
+            "emotion_state": self.emotion_state,
         }
 
     def embedding_text(self) -> str:

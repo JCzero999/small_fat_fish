@@ -88,6 +88,7 @@ class MemoryRetriever:
         now: datetime | None = None,
         semantic_top_k: int | None = None,
         episodic_top_k: int | None = None,
+        as_of: str | None = None,
     ) -> RetrievalResult:
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must not be empty")
@@ -99,6 +100,11 @@ class MemoryRetriever:
         query_vector = self.embedder.embed(query_text)
         query_emotion = detect_emotion(query_text)
         normalized_entities = [entity.casefold() for entity in entities if entity.strip()]
+        as_of_dt = None
+        if as_of is not None:
+            as_of_dt = parse_iso8601(as_of)
+            if as_of_dt.tzinfo is None:
+                raise ValueError("as_of must be timezone-aware")
 
         semantic_vectors = self.store.get_vectors(
             "semantic",
@@ -113,12 +119,14 @@ class MemoryRetriever:
         semantic_memories = [
             memory
             for memory in self.store.list_semantic()
-            if memory.id in semantic_vectors and self._eligible(memory, normalized_entities)
+            if memory.id in semantic_vectors
+            and self._eligible(memory, normalized_entities, as_of_dt)
         ]
         episodic_memories = [
             memory
             for memory in self.store.list_episodic()
-            if memory.id in episodic_vectors and self._eligible(memory, normalized_entities)
+            if memory.id in episodic_vectors
+            and self._eligible(memory, normalized_entities, as_of_dt)
         ]
 
         return RetrievalResult(
@@ -144,11 +152,25 @@ class MemoryRetriever:
             ),
         )
 
-    def _eligible(self, memory: Memory, entities: list[str]) -> bool:
+    def _eligible(
+        self, memory: Memory, entities: list[str], as_of: datetime | None = None
+    ) -> bool:
         if memory.archived or memory.importance < self.config.min_importance:
             return False
         if isinstance(memory, SemanticMemory) and memory.conflict_flag and memory.confidence < 0.25:
             return False
+        # 双时态过滤：only include memory valid at `as_of`
+        if as_of is not None:
+            if isinstance(memory, SemanticMemory):
+                if memory.valid_from is not None and as_of < parse_iso8601(memory.valid_from):
+                    return False
+                if memory.valid_to is not None and as_of >= parse_iso8601(memory.valid_to):
+                    return False
+            elif isinstance(memory, EpisodicMemory):
+                if memory.valid_from is not None and as_of < parse_iso8601(memory.valid_from):
+                    return False
+                if memory.valid_to is not None and as_of >= parse_iso8601(memory.valid_to):
+                    return False
         if entities:
             text = memory.embedding_text().casefold()
             return any(entity in text for entity in entities)
