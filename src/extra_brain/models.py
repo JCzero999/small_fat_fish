@@ -44,6 +44,36 @@ def new_memory_id(prefix: str, now: datetime | None = None) -> str:
     return f"{prefix}_{moment:%Y%m%d}_{uuid4().hex[:12]}"
 
 
+MEMORY_VIEWS = ("fact", "feeling", "bond", "story")
+
+
+def derive_view(
+    memory_type: str | None,
+    emotion_valence: str | None = None,
+    emotion_intensity: float | None = None,
+    is_episodic: bool = False,
+) -> str:
+    """多角度视角（v0.4.0 遗留）：写入时确定性算好，不依赖模型输出。
+
+    - story   ：情节记忆（事件本身）
+    - bond    ：关系类语义（type=relationship）
+    - feeling ：带显著情绪的语义（效价非 neutral 且 intensity ≥ 0.45）
+    - fact    ：其余事实/偏好/目标/特质
+    """
+    if is_episodic:
+        return "story"
+    if memory_type == "relationship":
+        return "bond"
+    if (
+        emotion_valence in ("positive", "negative", "mixed")
+        and isinstance(emotion_intensity, (int, float))
+        and not isinstance(emotion_intensity, bool)
+        and emotion_intensity >= 0.45
+    ):
+        return "feeling"
+    return "fact"
+
+
 def estimate_tokens(value: Any) -> int:
     """A conservative, dependency-free estimate for mixed Chinese/English JSON."""
 
@@ -311,6 +341,8 @@ class SemanticMemory:
     supersedes: str | None = None      # 被取代的记忆 ID，形成版本链
     # --- 六档保留度（v0.2.2） ---
     retention_tier: int = 0            # 0=热/P5, 1=温/P4, 2=冷/P3, 3=归档/P2, 4=墓碑/P1
+    # --- 多角度视角（v0.4.0 遗留，写入时确定性推导） ---
+    view: str = ""                     # fact | feeling | bond | story；空=按类型/情绪自动补标
 
     def __post_init__(self) -> None:
         self.id = _string(self.id, "semantic.id")
@@ -348,6 +380,12 @@ class SemanticMemory:
         if self.supersedes is not None:
             self.supersedes = _string(self.supersedes, "semantic.supersedes")
         self.retention_tier = _integer(self.retention_tier, "semantic.retention_tier")
+        if not self.view:
+            self.view = derive_view(
+                self.type, self.emotion_valence, self.emotion_intensity
+            )
+        else:
+            self.view = _choice(self.view, "semantic.view", MEMORY_VIEWS)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SemanticMemory:
@@ -378,6 +416,7 @@ class SemanticMemory:
             valid_to=data.get("valid_to"),
             supersedes=data.get("supersedes"),
             retention_tier=data.get("retention_tier", 0),
+            view=data.get("view", ""),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -404,6 +443,7 @@ class SemanticMemory:
             "valid_to": self.valid_to,
             "supersedes": self.supersedes,
             "retention_tier": self.retention_tier,
+            "view": self.view,
         }
 
     def embedding_text(self) -> str:
@@ -434,6 +474,8 @@ class EpisodicMemory:
     emotion_state: str | None = None  # open | acknowledged | attended | resolved | dormant
     # --- 六档保留度（v0.2.2） ---
     retention_tier: int = 0            # 0=热/P5, 1=温/P4, 2=冷/P3, 3=归档/P2, 4=墓碑/P1
+    # --- 多角度视角（v0.4.0 遗留）：情节记忆默认 story ---
+    view: str = ""                     # 空=自动补标；显式值须属于 MEMORY_VIEWS
 
     def __post_init__(self) -> None:
         self.id = _string(self.id, "episodic.id")
@@ -469,6 +511,10 @@ class EpisodicMemory:
                 ("open", "acknowledged", "attended", "resolved", "dormant"),
             )
         self.retention_tier = _integer(self.retention_tier, "episodic.retention_tier")
+        if not self.view:
+            self.view = derive_view(None, is_episodic=True)
+        else:
+            self.view = _choice(self.view, "episodic.view", MEMORY_VIEWS)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> EpisodicMemory:
@@ -503,6 +549,7 @@ class EpisodicMemory:
             supersedes=data.get("supersedes"),
             emotion_state=data.get("emotion_state"),
             retention_tier=data.get("retention_tier", 0),
+            view=data.get("view", ""),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -526,6 +573,7 @@ class EpisodicMemory:
             "supersedes": self.supersedes,
             "emotion_state": self.emotion_state,
             "retention_tier": self.retention_tier,
+            "view": self.view,
         }
 
     def embedding_text(self) -> str:

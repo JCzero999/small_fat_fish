@@ -13,6 +13,7 @@ from .models import (
     CoreMemoryLimitError,
     EpisodicMemory,
     Memory,
+    MEMORY_VIEWS,
     SemanticMemory,
     estimate_tokens,
     is_unresolved_episode,
@@ -93,6 +94,7 @@ class MemoryRetriever:
         episodic_top_k: int | None = None,
         as_of: str | None = None,
         primed_ids: Iterable[str] = (),
+        views: Iterable[str] = (),
     ) -> RetrievalResult:
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must not be empty")
@@ -104,6 +106,13 @@ class MemoryRetriever:
         query_vector = self.embedder.embed(query_text)
         query_emotion = detect_emotion(query_text)
         normalized_entities = [entity.casefold() for entity in entities if entity.strip()]
+        normalized_views = [view for view in views if view]
+        unknown_views = [view for view in normalized_views if view not in MEMORY_VIEWS]
+        if unknown_views:
+            raise ValueError(
+                f"unknown views: {', '.join(unknown_views)}; allowed: {', '.join(MEMORY_VIEWS)}"
+            )
+        views_set = set(normalized_views)
         as_of_dt = None
         if as_of is not None:
             as_of_dt = parse_iso8601(as_of)
@@ -124,13 +133,13 @@ class MemoryRetriever:
             memory
             for memory in self.store.list_semantic()
             if memory.id in semantic_vectors
-            and self._eligible(memory, normalized_entities, as_of_dt)
+            and self._eligible(memory, normalized_entities, as_of_dt, views_set)
         ]
         episodic_memories = [
             memory
             for memory in self.store.list_episodic()
             if memory.id in episodic_vectors
-            and self._eligible(memory, normalized_entities, as_of_dt)
+            and self._eligible(memory, normalized_entities, as_of_dt, views_set)
         ]
 
         primed = frozenset(
@@ -162,11 +171,18 @@ class MemoryRetriever:
         )
 
     def _eligible(
-        self, memory: Memory, entities: list[str], as_of: datetime | None = None
+        self,
+        memory: Memory,
+        entities: list[str],
+        as_of: datetime | None = None,
+        views: set[str] | None = None,
     ) -> bool:
         if memory.archived or memory.importance < self.config.min_importance:
             return False
         if isinstance(memory, SemanticMemory) and memory.conflict_flag and memory.confidence < 0.25:
+            return False
+        # 多视角过滤（v0.4.0 遗留）：非空 views 集合按记忆写入时算好的视角过滤。
+        if views and (getattr(memory, "view", "") or "") not in views:
             return False
         # 双时态过滤：only include memory valid at `as_of`
         if as_of is not None:
@@ -195,6 +211,7 @@ class MemoryRetriever:
         path: str | None = None,
         as_of: str | None = None,
         primed_ids: Iterable[str] = (),
+        views: Iterable[str] = (),
     ) -> RetrievalResult:
         """四路召回（v0.3.0）：
 
@@ -220,6 +237,7 @@ class MemoryRetriever:
             now=now,
             as_of=as_of,
             primed_ids=primed_ids,
+            views=views,
         )
         if path == "A":
             standard.path = "A"
@@ -233,6 +251,7 @@ class MemoryRetriever:
             now=now,
             as_of=as_of,
             primed_ids=primed_ids,
+            views=views,
         )
         if path == "B":
             entities_only.path = "B"
@@ -246,13 +265,14 @@ class MemoryRetriever:
             now=now,
             as_of=as_of,
             primed_ids=primed_ids,
+            views=views,
         )
         if path == "C":
             emotion_first.path = "C"
             return emotion_first
 
         # Path D: 时间点快照（as_of 翻车，返回空结果表示该时间点无数据）
-        snapshot = self._snapshot_search(query, now=now, as_of=as_of)
+        snapshot = self._snapshot_search(query, now=now, as_of=as_of, views=views)
         if path == "D":
             snapshot.path = "D"
             return snapshot
@@ -295,6 +315,7 @@ class MemoryRetriever:
         now: datetime | None = None,
         as_of: str | None = None,
         primed_ids: Iterable[str] = (),
+        views: Iterable[str] = (),
     ) -> RetrievalResult:
         """Path B：只使用实体关键词硬过滤，不计算语义相似度分数（similarity 设为 0）。"""
         if not entities:
@@ -306,6 +327,7 @@ class MemoryRetriever:
             now=now,
             as_of=as_of,
             primed_ids=primed_ids,
+            views=views,
         )
         # 重新计算分数：只保留 importance + recency + emotion，similarity=0
         primed_set = set(primed_ids)
@@ -354,6 +376,7 @@ class MemoryRetriever:
         now: datetime | None = None,
         as_of: str | None = None,
         primed_ids: Iterable[str] = (),
+        views: Iterable[str] = (),
     ) -> RetrievalResult:
         """Path C：以情绪共鸣为主导，语义相似度权重降低，情绪匹配权重提高。"""
         result = self.search(
@@ -363,6 +386,7 @@ class MemoryRetriever:
             now=now,
             as_of=as_of,
             primed_ids=primed_ids,
+            views=views,
         )
         query_emotion = detect_emotion("\n".join([*recent_context, query]))
         primed_set = set(primed_ids)
@@ -411,6 +435,7 @@ class MemoryRetriever:
         *,
         now: datetime | None = None,
         as_of: str | None = None,
+        views: Iterable[str] = (),
     ) -> RetrievalResult:
         """Path D：返回 as_of 时间点生效的记忆状态，不参与检索排序，仅作时间快照。"""
         if as_of is None:
@@ -420,6 +445,7 @@ class MemoryRetriever:
             query,
             now=now,
             as_of=as_of,
+            views=views,
         )
 
     def _rank_type(

@@ -41,6 +41,7 @@ from extra_brain.models import (  # noqa: E402
     utc_now,
 )
 from extra_brain.session import SessionTracker  # noqa: E402
+from extra_brain.storage import WriteBatch  # noqa: E402
 
 NOW = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -757,6 +758,183 @@ class VectorIndexTests(unittest.TestCase):
         vector = embedder.embed("测试文本")
         self.assertEqual(len(vector), 384)
         self.assertIn("openai-compatible", embedder.model_name)
+
+
+class ViewPerspectiveTests(TempDbTestCase):
+    """v0.4.0 遗留：多角度视角 fact/feeling/bond/story 打标 + 检索过滤。"""
+
+    def test_derivation_matrix(self) -> None:
+        from extra_brain.models import derive_view
+
+        self.assertEqual(derive_view("relationship"), "bond")
+        self.assertEqual(derive_view("fact", "negative", 0.5), "feeling")
+        self.assertEqual(derive_view("preference", "neutral", 0.9), "fact")
+        self.assertEqual(derive_view("fact", "mixed", 0.44), "fact")
+        self.assertEqual(derive_view(None, is_episodic=True), "story")
+
+    def test_legacy_memories_auto_backfill_view_on_load(self) -> None:
+        data = make_semantic("sem_view_legacy", object="绿茶", emotion_valence="positive",
+                             emotion_intensity=0.8).to_dict()
+        data.pop("view")  # 模拟旧库：无 view 字段
+        restored = SemanticMemory.from_dict(data)
+        self.assertEqual(restored.view, "feeling")
+        ep_data = make_episodic("ep_view_legacy").to_dict()
+        ep_data.pop("view")
+        self.assertEqual(EpisodicMemory.from_dict(ep_data).view, "story")
+
+    def test_invalid_view_rejected(self) -> None:
+        with self.assertRaises(MemoryValidationError):
+            make_semantic("sem_bad_view", view="mood")
+
+    def test_retrieve_filters_by_view(self) -> None:
+        with ExtraBrain(self.db_path) as brain:
+            brain.store.save_semantic(
+                make_semantic("sem_fact", object="白茶", emotion_valence="neutral",
+                              emotion_intensity=0.0)
+            )
+            brain.store.save_semantic(
+                make_semantic("sem_feel", object="白茶", emotion_valence="positive",
+                              emotion_intensity=0.8)
+            )
+            brain.store.save_semantic(
+                make_semantic("sem_bond", type="relationship", object="父女关系")
+            )
+            brain.store.save_episodic(make_episodic("ep_story", summary="白茶的故事"))
+            brain.reindex()
+
+            all_ids = brain.retrieve("白茶").memory_ids
+            self.assertEqual(len(all_ids), 4)
+            self.assertEqual(
+                brain.retrieve("白茶", views=["feeling"]).memory_ids, ["sem_feel"]
+            )
+            self.assertEqual(
+                set(brain.retrieve("白茶", views=["bond", "story"]).memory_ids),
+                {"sem_bond", "ep_story"},
+            )
+            with self.assertRaises(ValueError):
+                brain.retrieve("白茶", views=["nonsense"])
+
+    def test_injection_respects_views(self) -> None:
+        with ExtraBrain(self.db_path) as brain:
+            brain.store.save_semantic(
+                make_semantic("sem_iv_fact", object="白茶", emotion_valence="neutral",
+                              emotion_intensity=0.0)
+            )
+            brain.store.save_semantic(
+                make_semantic("sem_iv_feel", object="白茶", emotion_valence="negative",
+                              emotion_intensity=0.9)
+            )
+            brain.reindex()
+            injection = brain.build_injection("白茶", views=["fact"])
+            self.assertIn("sem_iv_fact", injection.context)
+            self.assertNotIn("sem_iv_feel", injection.context)
+
+    def test_merge_recomputes_view(self) -> None:
+        from extra_brain import ExtractionResult, SemanticCandidate
+
+        candidate = SemanticCandidate(
+            type="preference", subject="用户", predicate="喜欢", object="白茶",
+            detail="强烈地喜欢白茶", importance=0.7, emotion_valence="positive",
+            emotion_intensity=0.9, confidence=0.9,
+        )
+        with ExtraBrain(self.db_path, extractor=FakeExtractor(ExtractionResult(semantic_facts=[candidate]))) as brain:
+            brain.store.save_semantic(
+                make_semantic("sem_merge_view", object="白茶", emotion_valence="neutral",
+                              emotion_intensity=0.0)
+            )
+            report = brain.consolidate("用户：我超爱白茶！")
+            merged = brain.store.get_semantic("sem_merge_view")
+            self.assertEqual(merged.view, "feeling", report.to_dict())
+
+
+class ShadowLogRebuildTests(TempDbTestCase):
+    """v0.3.0 遗留：崩溃安全影子日志 + rebuild --from-log。"""
+
+    def _extractor_with_fact(self):
+        from extra_brain import ExtractionResult, SemanticCandidate
+
+        return FakeExtractor(
+            ExtractionResult(
+                semantic_facts=[
+                    SemanticCandidate(
+                        type="preference", subject="用户", predicate="喜欢", object="白茶",
+                        detail="用户明确说喜欢白茶。", importance=0.7,
+                        emotion_valence="positive", emotion_intensity=0.6, confidence=0.9,
+                    )
+                ]
+            )
+        )
+
+    def test_shadow_marked_done_after_consolidate(self) -> None:
+        with ExtraBrain(self.db_path, extractor=self._extractor_with_fact()) as brain:
+            brain.consolidate("用户：我喜欢白茶。")
+            self.assertEqual(brain.list_pending_consolidations(), [])
+
+    def test_crash_between_extract_and_write_stays_pending(self) -> None:
+        from extra_brain import ExtractionResult
+
+        extractor = FakeExtractor(ExtractionResult())
+        with ExtraBrain(self.db_path, extractor=extractor) as brain:
+            # 巩固成功 → done；再制造一条孤儿 pending（模拟崩溃残留）
+            brain.consolidate("用户：随便。")
+            brain.store.log_session_begin("log_orphan", "用户：崩溃前没来得及巩固。", None, now=NOW)
+            pending = brain.list_pending_consolidations()
+            self.assertEqual([entry["id"] for entry in pending], ["log_orphan"])
+
+        # 重放：用新 brain（带 extractor 结果），孤儿条目被巩固并标 done
+        from extra_brain import ExtractionResult as ER
+
+        replay_extractor = FakeExtractor(ER())
+        with ExtraBrain(self.db_path, extractor=replay_extractor) as brain:
+            results = brain.replay_pending()
+            self.assertEqual(len(results), 1)
+            self.assertTrue(results[0]["ok"])
+            self.assertEqual(brain.list_pending_consolidations(), [])
+
+    def test_replay_failure_keeps_entry_recoverable(self) -> None:
+        class BrokenExtractor:
+            def extract(self, prompt):
+                raise RuntimeError("LLM 挂了")
+
+        with ExtraBrain(self.db_path, extractor=BrokenExtractor()) as brain:
+            brain.store.log_session_begin("log_x", "用户：测试崩溃。", None, now=NOW)
+            results = brain.replay_pending()
+            self.assertFalse(results[0]["ok"])
+            # failed 条目仍在待重放清单里（note 记录原因）
+            pending = brain.list_pending_consolidations()
+            self.assertEqual([entry["id"] for entry in pending], ["log_x"])
+            self.assertIn("LLM 挂了", pending[0]["note"] or "")
+
+    def test_rebuild_from_log_restores_memories(self) -> None:
+        with ExtraBrain(self.db_path, extractor=self._extractor_with_fact()) as brain:
+            brain.consolidate("用户：我喜欢白茶。")
+            before = {m.id: m.to_dict() for m in brain.store.list_semantic(include_archived=True)}
+            # 破坏派生层：删掉向量（模拟晶格损坏）
+            brain.store.apply_batch(WriteBatch(operation="test.clear.vectors"))
+            with brain.store._lock, brain.store._connection:
+                brain.store._connection.execute("DELETE FROM memory_vectors")
+
+        with ExtraBrain(self.db_path) as brain:
+            report = brain.rebuild_from_log()
+            self.assertGreaterEqual(report["semantic_restored"], 1)
+            self.assertGreaterEqual(report["vectors_rebuilt"], 1)
+            after = {m.id: m.to_dict() for m in brain.store.list_semantic(include_archived=True)}
+            self.assertEqual(after, before)
+            # 重建后检索立即可用（向量已重算）
+            result = brain.retrieve("我喜欢什么茶？")
+            self.assertTrue(result.memory_ids)
+
+    def test_cli_rebuild_requires_yes(self) -> None:
+        from extra_brain.cli import main as cli_main
+
+        with ExtraBrain(self.db_path, extractor=self._extractor_with_fact()) as brain:
+            brain.consolidate("用户：我喜欢白茶。")
+        self.assertEqual(
+            cli_main(["--db", str(self.db_path), "rebuild", "from-log"]), 1
+        )
+        self.assertEqual(
+            cli_main(["--db", str(self.db_path), "rebuild", "from-log", "--yes"]), 0
+        )
 
 
 class CosineHelperTests(unittest.TestCase):

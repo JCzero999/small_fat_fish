@@ -10,7 +10,7 @@ from typing import Any, Sequence
 from .config import MemoryConfig
 from .engine import ExtraBrain
 from .extraction import ExtractionError, OpenAICompatibleExtractor
-from .models import CoreMemory, MemoryValidationError, to_iso8601, utc_now
+from .models import CoreMemory, MEMORY_VIEWS, MemoryValidationError, to_iso8601, utc_now
 from .session import SessionTracker
 
 
@@ -41,12 +41,20 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("query")
     search.add_argument("--entity", action="append", default=[], help="实体/关键词硬过滤，可重复")
     search.add_argument("--context-file", type=Path, help="最近上下文，每行一轮")
+    search.add_argument(
+        "--view", action="append", default=[], choices=sorted(MEMORY_VIEWS),
+        help="按视角过滤（fact/feeling/bond/story，可重复）",
+    )
 
     inject = commands.add_parser("inject", help="生成可直接放到系统提示词中的长期记忆上下文")
     inject.add_argument("query")
     inject.add_argument("--entity", action="append", default=[])
     inject.add_argument("--context-file", type=Path, help="最近上下文，每行一轮")
     inject.add_argument("--token-limit", type=int)
+    inject.add_argument(
+        "--view", action="append", default=[], choices=sorted(MEMORY_VIEWS),
+        help="按视角过滤（fact/feeling/bond/story，可重复）",
+    )
 
     list_command = commands.add_parser("list", help="列出长期记忆")
     list_command.add_argument("kind", choices=("semantic", "episodic", "style"))
@@ -74,6 +82,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("reindex", help="用当前 embedding 实现重建所有向量")
 
+    rebuild = commands.add_parser(
+        "rebuild", help="崩溃安全重建：--from-log 从审计快照重放记忆表；replay-pending 重放未巩固输入"
+    )
+    rebuild.add_argument(
+        "mode", choices=("from-log", "replay-pending"), help="from-log=重建派生层；replay-pending=重放影子输入"
+    )
+    rebuild.add_argument("--yes", action="store_true", help="from-log 全表重建需显式审批")
+    rebuild.add_argument("--limit", type=int, default=10, help="replay-pending 最多重放条数")
+
     chat = commands.add_parser("chat", help="本地交互式对话，自动/半自动巩固记忆")
     chat.add_argument("--threshold", type=int, default=8, help="累计多少轮后自动巩固（默认 8）")
     chat.add_argument("--no-auto", action="store_true", help="关闭自动巩固，仅手动 :consolidate")
@@ -85,7 +102,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     brain: ExtraBrain | None = None
     try:
-        if args.command in ("consolidate", "chat"):
+        if args.command in ("consolidate", "chat") or (
+            args.command == "rebuild" and args.mode == "replay-pending"
+        ):
             brain = ExtraBrain(
                 args.db,
                 extractor=OpenAICompatibleExtractor.from_env(),
@@ -128,7 +147,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else []
             )
             if args.command == "search":
-                result = brain.retrieve(args.query, recent_context=recent, entities=args.entity)
+                result = brain.retrieve(
+                    args.query, recent_context=recent, entities=args.entity,
+                    views=getattr(args, "view", []),
+                )
                 _print_json(result.to_dict())
             else:
                 injection = brain.build_injection(
@@ -136,6 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     recent_context=recent,
                     entities=args.entity,
                     token_limit=args.token_limit,
+                    views=getattr(args, "view", []),
                 )
                 print(injection.context)
         elif args.command == "list":
@@ -164,6 +187,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_json(brain.store.list_audit(limit=args.limit))
         elif args.command == "reindex":
             _print_json({"indexed": brain.reindex()})
+        elif args.command == "rebuild":
+            if args.mode == "from-log":
+                if not args.yes:
+                    print(
+                        "extra-brain: rebuild from-log 会用审计快照整表重建（先建议备份），"
+                        "确认请加 --yes",
+                        file=sys.stderr,
+                    )
+                    return 1
+                _print_json(brain.rebuild_from_log())
+            else:
+                _print_json(brain.replay_pending(limit=args.limit))
         elif args.command == "chat":
             return _run_chat(brain, args.threshold, auto=not args.no_auto)
         return 0

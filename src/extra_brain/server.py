@@ -138,6 +138,7 @@ class ExtraBrainServer:
         if token_limit is not None:
             token_limit = int(token_limit)
         now = _parse_now(body.get("now"))
+        views = _string_list(body.get("views"), "views")
 
         with self._lock:
             injection = self._brain(peer_id).build_injection(
@@ -146,6 +147,7 @@ class ExtraBrainServer:
                 entities=entities,
                 token_limit=token_limit,
                 now=now,
+                views=views,
             )
         return {
             "peer_id": peer_id,

@@ -23,6 +23,7 @@ from .models import (
     EpisodicMemory,
     SemanticMemory,
     StyleMemory,
+    derive_view,
     is_emotion_protected,
     is_unresolved_episode,
     new_memory_id,
@@ -127,6 +128,7 @@ class Consolidator:
         *,
         session_id: str | None = None,
         now: datetime | None = None,
+        shadow_log_id: str | None = None,
     ) -> ConsolidationReport:
         now = now or utc_now()
         if now.tzinfo is None:
@@ -136,6 +138,44 @@ class Consolidator:
         transaction_id = uuid4().hex
         report = ConsolidationReport(transaction_id)
 
+        # 崩溃安全影子日志（v0.3.0 遗留）：先落原始输入（pending），
+        # 与记忆同事务标记 done——抽取期间崩溃输入不丢，可 replay-pending 重放。
+        # replay 时传入原 log id，成功即把那条 pending 翻成 done。
+        shadow_log_id = shadow_log_id or uuid4().hex
+        self.store.log_session_begin(
+            shadow_log_id, conversation, session_id, now=now
+        )
+
+        try:
+            return self._consolidate_inner(
+                conversation,
+                session_id=session_id,
+                now=now,
+                now_iso=now_iso,
+                transaction_id=transaction_id,
+                report=report,
+                shadow_log_id=shadow_log_id,
+            )
+        except Exception as exc:
+            try:
+                self.store.log_session_finish(
+                    shadow_log_id, "failed", now=utc_now(), note=str(exc)[:200]
+                )
+            except Exception:
+                pass  # 标记失败不影响原始异常上抛
+            raise
+
+    def _consolidate_inner(
+        self,
+        conversation: str,
+        *,
+        session_id: str | None,
+        now: datetime,
+        now_iso: str,
+        transaction_id: str,
+        report: ConsolidationReport,
+        shadow_log_id: str,
+    ) -> ConsolidationReport:
         existing_semantic = self.store.list_semantic()
         existing_episodic = self.store.list_episodic()
         prompt_memories = self._prompt_memories(existing_semantic, existing_episodic)
@@ -312,6 +352,7 @@ class Consolidator:
             vectors=vectors,
             operation="consolidate",
             transaction_id=transaction_id,
+            finish_log_id=shadow_log_id,
             audit_details={
                 "session_id": session_id,
                 "report": report.to_dict(),
@@ -698,6 +739,10 @@ def _merge_semantic(
     merged.last_activated = now_iso
     merged.conflict_flag = old.conflict_flag and incoming.conflict_flag
     merged.archived = False
+    # 情绪字段可能因合并升级（valence→mixed / intensity 取大），视角确定性重算。
+    merged.view = derive_view(
+        merged.type, merged.emotion_valence, merged.emotion_intensity
+    )
     return merged
 
 

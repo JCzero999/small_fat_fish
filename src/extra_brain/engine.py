@@ -125,6 +125,7 @@ class ExtraBrain:
         as_of: str | None = None,
         path: str | None = None,
         primed_ids: Sequence[str] = (),
+        views: Sequence[str] = (),
     ) -> RetrievalResult:
         if path is not None:
             return self.retriever.search_four_paths(
@@ -135,6 +136,7 @@ class ExtraBrain:
                 path=path,
                 as_of=as_of,
                 primed_ids=primed_ids,
+                views=views,
             )
         return self.retriever.search(
             query,
@@ -143,6 +145,7 @@ class ExtraBrain:
             now=now,
             as_of=as_of,
             primed_ids=primed_ids,
+            views=views,
         )
 
     def build_injection(
@@ -154,6 +157,7 @@ class ExtraBrain:
         token_limit: int | None = None,
         now: datetime | None = None,
         primed_ids: Sequence[str] = (),
+        views: Sequence[str] = (),
     ) -> Injection:
         retrieved = self.retrieve(
             query,
@@ -161,6 +165,7 @@ class ExtraBrain:
             entities=entities,
             now=now,
             primed_ids=primed_ids,
+            views=views,
         )
         injection = self.retriever.build_injection(
             self.core, retrieved, token_limit=token_limit
@@ -187,6 +192,44 @@ class ExtraBrain:
             WriteBatch(vectors=entries, operation="index.rebuild", audit_details={"count": len(entries)})
         )
         return len(entries)
+
+    # --- v0.3.0 遗留：崩溃安全重建 ---
+
+    def rebuild_from_log(self) -> dict[str, Any]:
+        """从 operation_log 的 after 快照重建记忆表 + 向量派生层。
+
+        晶格是派生层，坏了重放，不是数据丢失。整批重建在一个事务里完成。
+        """
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        restored = self.store.rebuild_from_log()
+        restored["vectors_rebuilt"] = self.reindex()
+        return restored
+
+    def list_pending_consolidations(self) -> list[dict[str, Any]]:
+        """崩溃后待重放的影子输入（pending/failed）。"""
+        return self.store.list_pending_sessions()
+
+    def replay_pending(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        """重放未完成的巩固输入（需要已配置 extractor）。成功的标 done，失败的记 note。"""
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        if self._consolidator is None:
+            raise ExtractionError("no extractor configured; cannot replay pending")
+        results: list[dict[str, Any]] = []
+        for entry in self.store.list_pending_sessions()[:limit]:
+            try:
+                report = self._consolidator.consolidate(
+                    entry["conversation"],
+                    session_id=entry["session_id"],
+                    shadow_log_id=entry["id"],
+                )
+                results.append(
+                    {"log_id": entry["id"], "ok": True, "report": report.to_dict()}
+                )
+            except Exception as exc:
+                results.append({"log_id": entry["id"], "ok": False, "error": str(exc)[:200]})
+        return results
 
     # --- v0.4.0 关系模型 ---
 

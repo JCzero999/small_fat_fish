@@ -52,6 +52,7 @@ class WriteBatch:
     operation: str = "write_batch"
     transaction_id: str = field(default_factory=lambda: uuid4().hex)
     audit_details: dict[str, Any] | None = None
+    finish_log_id: str | None = None  # 巩固成功时随本批事务把影子日志标 done
 
 
 class MemoryStore:
@@ -239,6 +240,18 @@ class MemoryStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_operation_entity
                     ON operation_log(entity_type, entity_id, sequence);
+
+                CREATE TABLE IF NOT EXISTS session_log (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    session_id TEXT,
+                    conversation TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'done', 'failed')),
+                    finished_at TEXT,
+                    note TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_session_log_status
+                    ON session_log(status, created_at);
                 """
             )
 
@@ -755,6 +768,11 @@ class MemoryStore:
                     None,
                     self._encrypt(_to_json(batch.audit_details)),
                 )
+            if batch.finish_log_id is not None:
+                self._connection.execute(
+                    "UPDATE session_log SET status = 'done', finished_at = ? WHERE id = ?",
+                    (to_iso8601(utc_now()), batch.finish_log_id),
+                )
 
     def _write_semantic(self, batch: WriteBatch, memory: SemanticMemory) -> None:
         before = self._connection.execute(
@@ -1098,6 +1116,200 @@ class MemoryStore:
             "style": {"total": style_total},
             "vectors": {"total": vector_count},
             "db_size_bytes": db_size_bytes,
+        }
+
+    # --- v0.3.0 遗留：崩溃安全影子日志（session_log） ---
+
+    def log_session_begin(
+        self, log_id: str, conversation: str, session_id: str | None, *, now: datetime
+    ) -> None:
+        """巩固开始前落影子：即使进程在 LLM 抽取期间崩溃，原始输入也不丢。"""
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT OR REPLACE INTO session_log(id, created_at, session_id, conversation, status)
+                VALUES (?, ?, ?, ?, 'pending')
+                """,
+                (log_id, to_iso8601(now), session_id, conversation),
+            )
+
+    def log_session_finish(
+        self, log_id: str, status: str, *, now: datetime, note: str | None = None
+    ) -> None:
+        if status not in ("done", "failed"):
+            raise ValueError(f"invalid session_log status: {status!r}")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE session_log SET status = ?, finished_at = ?, note = ? WHERE id = ?",
+                (status, to_iso8601(now), note, log_id),
+            )
+
+    def list_pending_sessions(self) -> list[dict[str, Any]]:
+        """返回待重放的影子条目（pending + failed），按时间升序。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT id, created_at, session_id, conversation, status, note
+                FROM session_log WHERE status IN ('pending', 'failed')
+                ORDER BY created_at, id
+                """
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "created_at": row["created_at"],
+                "session_id": row["session_id"],
+                "conversation": row["conversation"],
+                "status": row["status"],
+                "note": row["note"],
+            }
+            for row in rows
+        ]
+
+    def rebuild_from_log(self) -> dict[str, Any]:
+        """从 operation_log 的 after 快照重建记忆表与向量索引派生层。
+
+        晶格（向量/表列）是派生数据，坏了就重放，不是数据丢失：
+        - core：取 entity_type='core' 最新一条 after 快照；
+        - semantic/episodic：每个 id 取最新 after；无 after（最后一条为删除语义）则跳过；
+        - style：同理；
+        - vectors 由调用方（engine）用当前 embedder 重建。
+        整个过程在单事务里完成，失败自动回滚，审计照常记录。
+        """
+        latest: dict[tuple[str, str], str] = {}
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT entity_type, entity_id, after_json FROM operation_log
+                WHERE entity_type IN ('core', 'semantic', 'episodic', 'style')
+                  AND after_json IS NOT NULL
+                ORDER BY sequence ASC
+                """
+            ).fetchall()
+            for row in rows:
+                payload = self._decrypt(row["after_json"])
+                try:
+                    json.loads(payload)
+                except (ValueError, TypeError):
+                    continue  # 快照损坏（如换过加密口令）：跳过该条，不猜测
+                latest[(row["entity_type"], row["entity_id"])] = payload
+
+        core_json = latest.get(("core", "core"))
+        semantic_items = [
+            (entity_id, payload)
+            for (etype, entity_id), payload in latest.items()
+            if etype == "semantic"
+        ]
+        episodic_items = [
+            (entity_id, payload)
+            for (etype, entity_id), payload in latest.items()
+            if etype == "episodic"
+        ]
+        style_items = [
+            (entity_id, payload)
+            for (etype, entity_id), payload in latest.items()
+            if etype == "style"
+        ]
+
+        batch = WriteBatch(
+            operation="log.rebuild",
+            audit_details={
+                "core": core_json is not None,
+                "semantic": len(semantic_items),
+                "episodic": len(episodic_items),
+                "style": len(style_items),
+            },
+        )
+        with self._lock, self._connection:
+            self._connection.execute("DELETE FROM semantic_memories")
+            self._connection.execute("DELETE FROM episodic_memories")
+            self._connection.execute("DELETE FROM style_memories")
+            self._connection.execute("DELETE FROM memory_vectors")
+
+            def _col(name: str, data: dict[str, Any], default: Any = None) -> Any:
+                value = data.get(name, default)
+                return value if value is not None else default
+
+            for entity_id, payload in semantic_items:
+                data = json.loads(payload)
+                self._connection.execute(
+                    """
+                    INSERT INTO semantic_memories(
+                        id, subject, predicate, importance, confidence, decay_score,
+                        protected, archived, last_activated, data
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entity_id,
+                        str(_col("subject", data, "")),
+                        str(_col("predicate", data, "")),
+                        float(_col("importance", data, 0.0)),
+                        float(_col("confidence", data, 0.0)),
+                        float(_col("decay_score", data, 1.0)),
+                        int(bool(_col("protected", data, False))),
+                        int(bool(_col("archived", data, False))),
+                        str(_col("last_activated", data, "")),
+                        self._encrypt(payload),
+                    ),
+                )
+            for entity_id, payload in episodic_items:
+                data = json.loads(payload)
+                self._connection.execute(
+                    """
+                    INSERT INTO episodic_memories(
+                        id, timestamp, importance, decay_score, protected, archived,
+                        last_activated, data
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entity_id,
+                        str(_col("timestamp", data, "")),
+                        float(_col("importance", data, 0.0)),
+                        float(_col("decay_score", data, 1.0)),
+                        int(bool(_col("protected", data, False))),
+                        int(bool(_col("archived", data, False))),
+                        _col("last_activated", data),
+                        self._encrypt(payload),
+                    ),
+                )
+            for entity_id, payload in style_items:
+                data = json.loads(payload)
+                self._connection.execute(
+                    """
+                    INSERT INTO style_memories(id, category, importance, last_observed, data)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entity_id,
+                        str(_col("category", data, "")),
+                        float(_col("importance", data, 0.0)),
+                        str(_col("last_observed", data, "")),
+                        self._encrypt(payload),
+                    ),
+                )
+            if core_json is not None:
+                self._connection.execute(
+                    """
+                    INSERT INTO core_memory(singleton, data) VALUES (1, ?)
+                    ON CONFLICT(singleton) DO UPDATE SET data = excluded.data
+                    """,
+                    (self._encrypt(core_json),),
+                )
+            self._audit(batch, "rebuild", "log", None, None)
+            if batch.audit_details is not None:
+                self._audit(
+                    batch,
+                    "rebuild",
+                    "summary",
+                    None,
+                    None,
+                    self._encrypt(_to_json(batch.audit_details)),
+                )
+        return {
+            "core_restored": core_json is not None,
+            "semantic_restored": len(semantic_items),
+            "episodic_restored": len(episodic_items),
+            "style_restored": len(style_items),
         }
 
 

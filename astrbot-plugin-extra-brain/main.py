@@ -401,7 +401,9 @@ class ExtraBrainPlugin(star.Star):
         while True:
             try:
                 await asyncio.sleep(pcfg["interval"] * 60)
-                await self._proactive_tick(pcfg)
+                summary = await self._proactive_tick(pcfg)
+                # 开口与未开口都记录：面板外也要能回答「最近为什么没说」
+                logger.info(f"extra-brain: 主动开口轮询结果：{summary}")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

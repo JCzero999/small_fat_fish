@@ -32,6 +32,7 @@ from .models import (
     CoreMemoryLimitError,
     EpisodicMemory,
     Identity,
+    MEMORY_VIEWS,
     MemoryAssociation,
     MemoryValidationError,
     NarrativeLayer,
@@ -41,6 +42,7 @@ from .models import (
     StyleMemory,
     UserSchema,
     UserStableProfile,
+    derive_view,
     is_emotion_protected,
     is_unresolved_episode,
 )
@@ -66,6 +68,7 @@ __all__ = [
     "Identity",
     "Injection",
     "LocalHashingEmbedder",
+    "MEMORY_VIEWS",
     "MemoryAssociation",
     "MemoryConfig",
     "MemoryExtractor",
@@ -95,6 +98,8 @@ __all__ = [
     "build_vector_index",
     "calculate_decay",
     "cosine_similarity",
+    "derive_view",
+    "is_emotion_protected",
     "is_unresolved_episode",
 ]
 
