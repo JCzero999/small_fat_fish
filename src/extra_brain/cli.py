@@ -21,6 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("EXTRA_BRAIN_DB", "extra_brain.db"),
         help="SQLite 数据库路径（默认：./extra_brain.db）",
     )
+    parser.add_argument(
+        "--companion-db",
+        default=os.environ.get("EXTRA_BRAIN_COMPANION_DB", ""),
+        help="全局伴侣库路径（人设/称呼/稳定偏好跨场景共享；默认 EXTRA_BRAIN_COMPANION_DB）",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
     commands.add_parser("init", help="初始化数据库并显示 Core Memory")
@@ -94,12 +99,16 @@ def build_parser() -> argparse.ArgumentParser:
     chat = commands.add_parser("chat", help="本地交互式对话，自动/半自动巩固记忆")
     chat.add_argument("--threshold", type=int, default=8, help="累计多少轮后自动巩固（默认 8）")
     chat.add_argument("--no-auto", action="store_true", help="关闭自动巩固，仅手动 :consolidate")
+
+    commands.add_parser("sync-persona", help="把本库人设/称呼/稳定偏好推入全局伴侣库（--companion-db）")
+    commands.add_parser("pull-persona", help="从全局伴侣库拉取人设到本库（新场景自动继承）")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    companion = args.companion_db or None
     brain: ExtraBrain | None = None
     try:
         if args.command in ("consolidate", "chat") or (
@@ -109,9 +118,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.db,
                 extractor=OpenAICompatibleExtractor.from_env(),
                 config=MemoryConfig(),
+                companion_db=companion,
             )
         else:
-            brain = ExtraBrain(args.db)
+            brain = ExtraBrain(args.db, companion_db=companion)
 
         if args.command == "init":
             _print_json(brain.core.to_dict())
@@ -187,6 +197,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_json(brain.store.list_audit(limit=args.limit))
         elif args.command == "reindex":
             _print_json({"indexed": brain.reindex()})
+        elif args.command == "sync-persona":
+            _print_json(brain.sync_persona_to_companion())
+        elif args.command == "pull-persona":
+            _print_json(brain.pull_persona_from_companion())
         elif args.command == "rebuild":
             if args.mode == "from-log":
                 if not args.yes:

@@ -56,12 +56,17 @@ class ExtraBrainServer:
         config: MemoryConfig | None = None,
         read_only: bool = False,
         encryption_passphrase: str | None = None,
+        companion_db: str | Path | None = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.config = config or MemoryConfig()
         self.extractor = extractor
         self.read_only = bool(read_only)
         self.encryption_passphrase = encryption_passphrase
+        # 未显式指定时默认 data_dir/_global.db —— 全局伴侣层（人设/稳定偏好跨场景共享）
+        self.companion_db = (
+            Path(companion_db) if companion_db else self.data_dir / "_global.db"
+        )
         self._brains: dict[str, ExtraBrain] = {}
         self._lock = threading.RLock()
 
@@ -86,6 +91,7 @@ class ExtraBrainServer:
                     config=self.config,
                     read_only=self.read_only,
                     encryption_passphrase=self.encryption_passphrase,
+                    companion_db=self.companion_db,
                 )
                 self._brains[peer_id] = brain
             return brain

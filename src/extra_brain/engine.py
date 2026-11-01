@@ -36,7 +36,12 @@ from .storage import MemoryStore, WriteBatch
 
 
 class ExtraBrain:
-    """Public facade for storage, consolidation, retrieval, and prompt injection."""
+    """Public facade for storage, consolidation, retrieval, and prompt injection.
+
+    ``companion_db`` 可选：指向一个**全局伴侣库**（persona/称呼/说话风格/跨场景稳定事实）。
+    每个 peer 仍保留自己的情景库（事件、场景专属记忆），但检索与注入会把两层合并——
+    私聊里定下的人设和偏好，群聊里同样「记得」，像真人一样不分窗口。
+    """
 
     def __init__(
         self,
@@ -47,6 +52,7 @@ class ExtraBrain:
         config: MemoryConfig | None = None,
         read_only: bool = False,
         encryption_passphrase: str | None = None,
+        companion_db: str | Path | None = None,
     ) -> None:
         self.config = config or MemoryConfig()
         self.read_only = bool(read_only)
@@ -69,6 +75,18 @@ class ExtraBrain:
             if extractor is not None
             else None
         )
+        # 全局伴侣层：复用同一 embedder/config；不带 extractor（情景巩固只写 peer 库）。
+        # 自引用防护：companion 与自身同一路径时不挂载（否则无限递归），
+        # 这同时允许把 _global 当普通 peer 直接 consolidate 全局层。
+        self.companion: ExtraBrain | None = None
+        if companion_db is not None and str(Path(companion_db)) != str(Path(db_path)):
+            self.companion = ExtraBrain(
+                companion_db,
+                embedder=self.embedder,
+                config=self.config,
+                read_only=self.read_only,
+                encryption_passphrase=encryption_passphrase,
+            )
 
     @classmethod
     def from_env(
@@ -115,7 +133,78 @@ class ExtraBrain:
             conversation = format_conversation(conversation)
         return self._consolidator.consolidate(conversation, session_id=session_id, now=now)
 
+    def _merged_core(self) -> CoreMemory:
+        """合并两层 Core：全局层主导人设/画像，本层保留活跃线程（情景）。"""
+        import copy
+
+        if self.companion is None:
+            return self.core
+        base = copy.deepcopy(self.companion.core)
+        peer = self.core
+        base.active_threads = peer.active_threads
+        base.protected_memories = list(
+            dict.fromkeys([*base.protected_memories, *peer.protected_memories])
+        )
+        profile = base.user_stable_profile
+        for field_name in ("key_traits", "core_preferences", "important_life_facts"):
+            values = getattr(profile, field_name)
+            values.extend(
+                value
+                for value in getattr(peer.user_stable_profile, field_name)
+                if value not in values
+            )
+        return base
+
     def retrieve(
+        self,
+        query: str,
+        *,
+        recent_context: Sequence[str] = (),
+        entities: Sequence[str] = (),
+        now: datetime | None = None,
+        as_of: str | None = None,
+        path: str | None = None,
+        primed_ids: Sequence[str] = (),
+        views: Sequence[str] = (),
+        include_companion: bool = True,
+    ) -> RetrievalResult:
+        own = self._retrieve_one(
+            query,
+            recent_context=recent_context,
+            entities=entities,
+            now=now,
+            as_of=as_of,
+            path=path,
+            primed_ids=primed_ids,
+            views=views,
+        )
+        if not include_companion or self.companion is None:
+            return own
+        shared = self.companion._retrieve_one(
+            query,
+            recent_context=recent_context,
+            entities=entities,
+            now=now,
+            as_of=as_of,
+            path=path,
+            primed_ids=primed_ids,
+            views=views,
+        )
+        semantic = sorted(
+            [*shared.semantic, *own.semantic],
+            key=lambda item: item.final_score,
+            reverse=True,
+        )[: self.config.semantic_top_k]
+        episodic = sorted(
+            [*shared.episodic, *own.episodic],
+            key=lambda item: item.final_score,
+            reverse=True,
+        )[: self.config.episodic_top_k]
+        merged = RetrievalResult(semantic=semantic, episodic=episodic)
+        merged.path = f"{own.path}+companion" if shared.path == own.path else "companion"
+        return merged
+
+    def _retrieve_one(
         self,
         query: str,
         *,
@@ -158,6 +247,7 @@ class ExtraBrain:
         now: datetime | None = None,
         primed_ids: Sequence[str] = (),
         views: Sequence[str] = (),
+        include_companion: bool = True,
     ) -> Injection:
         retrieved = self.retrieve(
             query,
@@ -166,16 +256,36 @@ class ExtraBrain:
             now=now,
             primed_ids=primed_ids,
             views=views,
+            include_companion=include_companion,
         )
+        core = self._merged_core() if include_companion else self.core
         injection = self.retriever.build_injection(
-            self.core, retrieved, token_limit=token_limit
+            core, retrieved, token_limit=token_limit
         )
         # Only memories that actually fit into the injected context count as activated.
-        # 只读模式下跳过激活写入。
+        # 只读模式下跳过激活写入；激活按归属层拆分回写各自库。
         if not self.read_only:
-            self.store.record_activations(
-                injection.retrieved.memory_ids, now=now or utc_now()
-            )
+            moment = now or utc_now()
+            ids = injection.retrieved.memory_ids
+            if self.companion is not None and include_companion:
+                companion_ids = {
+                    memory.id
+                    for memory in (
+                        *(item.memory for item in retrieved.semantic),
+                        *(item.memory for item in retrieved.episodic),
+                    )
+                    if self.companion.store.get_memory(memory.id) is not None
+                }
+                peer_ids = [memory_id for memory_id in ids if memory_id not in companion_ids]
+                if peer_ids:
+                    self.store.record_activations(peer_ids, now=moment)
+                if companion_ids:
+                    self.companion.store.record_activations(
+                        [memory_id for memory_id in ids if memory_id in companion_ids],
+                        now=moment,
+                    )
+            else:
+                self.store.record_activations(ids, now=moment)
         return injection
 
     def reindex(self) -> int:
@@ -457,8 +567,59 @@ class ExtraBrain:
         )
         return base
 
+    def sync_persona_to_companion(self, *, keep_threads: bool = False) -> dict[str, Any]:
+        """把本层 Core 的人设/称呼/画像推入全局伴侣层（私聊训练成果 → 全场景生效）。"""
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        if self.companion is None:
+            raise ValueError("no companion_db configured")
+        import copy
+
+        peer = self.core
+        target = copy.deepcopy(self.companion.core)
+        target.identity = copy.deepcopy(peer.identity)
+        target.user_stable_profile = copy.deepcopy(peer.user_stable_profile)
+        if keep_threads:
+            target.active_threads = copy.deepcopy(peer.active_threads)
+        target.last_updated = to_iso8601(utc_now())
+        # 版本锚：push 前把当前快照记入人格锚历史（v0.2.0 rollback 链路复用）
+        snapshot = {
+            "version": f"push_{target.last_updated}",
+            "at": target.last_updated,
+            "persona_core": target.identity.persona_core,
+            "from": str(self.store.path),
+        }
+        target.persona_anchor_history = [*target.persona_anchor_history[-9:], snapshot]
+        target.persona_anchor_version = snapshot["version"]
+        self.companion.save_core(target)
+        return {"pushed_to": str(self.companion.store.path), "anchor": snapshot["version"]}
+
+    def pull_persona_from_companion(self) -> dict[str, Any]:
+        """从全局层拉取人设到本层（新 peer 自动继承），不动本层活跃线程。"""
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        if self.companion is None:
+            raise ValueError("no companion_db configured")
+        import copy
+
+        shared = self.companion.core
+        local = copy.deepcopy(self.core)
+        local.identity = copy.deepcopy(shared.identity)
+        profile = local.user_stable_profile
+        source = shared.user_stable_profile
+        if not profile.preferred_name:
+            profile.preferred_name = source.preferred_name
+        for field_name in ("key_traits", "core_preferences", "important_life_facts"):
+            values = getattr(profile, field_name)
+            values.extend(v for v in getattr(source, field_name) if v not in values)
+        local.last_updated = to_iso8601(utc_now())
+        self.save_core(local)
+        return {"pulled_from": str(self.companion.store.path)}
+
     def close(self) -> None:
         self.store.close()
+        if self.companion is not None:
+            self.companion.close()
 
     def __enter__(self) -> ExtraBrain:
         return self

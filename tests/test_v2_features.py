@@ -937,6 +937,79 @@ class ShadowLogRebuildTests(TempDbTestCase):
         )
 
 
+class CompanionLayerShareTests(TempDbTestCase):
+    """全局伴侣库：人设/稳定偏好跨 peer 共享，情景记忆仍按 peer 隔离。"""
+
+    def _make(self, peer: str) -> ExtraBrain:
+        d = self.db_path.parent
+        return ExtraBrain(
+            d / f"{peer}.db",
+            companion_db=d / "_global.db",
+        )
+
+    def test_persona_shared_across_peers(self) -> None:
+        with self._make("alice") as alice, self._make("bob") as bob:
+            core = alice.core
+            core.identity.name = "小豚"
+            core.identity.persona_core = "十几岁的女儿"
+            core.user_stable_profile.core_preferences.append("说话不要带星号")
+            alice.save_core(core)
+            alice.sync_persona_to_companion()
+
+            # bob 注入的上下文里应出现全局人设与偏好（即便 bob 自己的库是空的）
+            injection = bob.build_injection("你好呀")
+            self.assertIn("小豚", injection.context)
+            self.assertIn("说话不要带星号", injection.context)
+
+    def test_peer_threads_stay_local(self) -> None:
+        with self._make("alice") as alice:
+            core = alice.core
+            from extra_brain.models import ActiveThread, to_iso8601 as _iso, utc_now as _now
+            core.active_threads.append(
+                ActiveThread(id="t_1", summary="暗号核对", status="open", last_mentioned=_iso(_now()))
+            )
+            alice.save_core(core)
+            alice.sync_persona_to_companion()
+        with self._make("bob") as bob:
+            # active_threads 不随 push 走：bob 看不到 alice 的线程
+            self.assertEqual(bob.core.active_threads, [])
+            merged = bob._merged_core()
+            self.assertEqual(merged.identity.name, "小豚")  # 人设共享
+            self.assertEqual(merged.active_threads, [])     # 线程隔离
+
+    def test_retrieval_merges_semantic_from_global(self) -> None:
+        with self._make("alice") as alice:
+            alice.store.save_semantic(make_semantic("sem_global_fact", subject="爸爸", object="JCzero"))
+            # 把它推进全局层：直接写 companion 库
+            alice.companion.store.save_semantic(
+                make_semantic("sem_shared_pref", object="白茶", subject="爸爸")
+            )
+            alice.companion.reindex()
+            alice.reindex()
+            result = alice.retrieve("爸爸喜欢什么？")
+            self.assertIn("sem_shared_pref", result.memory_ids)
+            # 其他 peer 也能检索到全局层记忆
+        with self._make("bob") as bob:
+            bob_result = bob.retrieve("爸爸喜欢什么？")
+            self.assertIn("sem_shared_pref", bob_result.memory_ids)
+
+    def test_self_reference_guard(self) -> None:
+        path = self.db_path / "_global.db"
+        brain = ExtraBrain(path, companion_db=path)
+        try:
+            self.assertIsNone(brain.companion)  # 同路径不挂载，不无限递归
+        finally:
+            brain.close()
+
+    def test_persona_anchor_history_records_push(self) -> None:
+        with self._make("alice") as alice:
+            result = alice.sync_persona_to_companion()
+            self.assertTrue(result["anchor"].startswith("push_"))
+            history = alice.companion.core.persona_anchor_history
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]["from"], str(alice.store.path))
+
+
 class CosineHelperTests(unittest.TestCase):
     def test_similarity_bounds(self) -> None:
         self.assertAlmostEqual(cosine_similarity([1, 0], [1, 0]), 1.0, places=5)
