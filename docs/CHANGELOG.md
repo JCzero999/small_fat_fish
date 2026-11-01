@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-11-01（傍晚续） — v0.6.0 收官：主动开口上线 + 多视角打标 + 崩溃安全重建 ✅
+
+### 主动开口正式启用 ✅
+- ✅ `proactive_enabled=true` 已写入插件配置（注意：AstrBot 的插件配置在 `data/config/<插件名>_config.json`，不是 `cmd_config.json` 的 plugin_store——排查过一次位置错误）；重启后日志确认 `extra-brain: 主动开口循环已启动`
+- ✅ 每轮轮询结果无论开口与否都写 info 日志（回答「最近为什么没说」）
+- 节奏：每 20 分钟骰 30%、每日 ≤5 次、静默 ≥2 小时、22–8 点免打扰；指令 `/memory proactive status|enable|disable|test`
+
+### 多角度视角 fact/feeling/bond/story（v0.4.0 遗留清零）✅
+- ✅ `models.MEMORY_VIEWS` + `derive_view()`：写入时**确定性推导**（relationship→bond、效价非 neutral 且 intensity≥0.45→feeling、情节→story、其余→fact），不依赖模型输出
+- ✅ SemanticMemory/EpisodicMemory 新增 `view` 字段；旧库数据加载即自动补标（实测：QQ 库回填为 fact6/feeling7/bond3/story4，只读验证零写入）
+- ✅ 检索过滤全线贯穿：`search`/`search_four_paths`/`retrieve`/`build_injection`/sidecar `/inject`/CLI `--view`（非法视角值报错）
+- ✅ `_merge_semantic` 合并后按最终情绪字段重算视角
+
+### 崩溃安全影子日志 + rebuild --from-log（v0.3.0 遗留清零）✅
+- ✅ `session_log` 影子表：巩固开始前落 pending 原始输入；成功时与记忆**同事务**标 done（`WriteBatch.finish_log_id`）；异常标 failed+note——LLM 抽取期间崩溃，输入也不丢
+- ✅ `engine.rebuild_from_log()`：从 `operation_log` 每条实体的最新 after 快照重放记忆表并重算向量（单事务；损坏/口令不符快照跳过不猜）；CLI `rebuild from-log --yes`（全表重建显式审批）
+- ✅ `engine.replay_pending()`：重放 pending/failed 影子输入（复用原 log id 翻 done，失败保留可再重放）；CLI `rebuild replay-pending`
+
+### 验证与交付
+- ✅ **99 项单测全绿**（24+12+63；本轮 +11：视角 6 + 影子日志 5）
+- ✅ 提交 `a7df63f` 推送 GitHub；AstrBot 由 Startup 看门狗以新代码重启接管（6185/6099 LISTEN、6199 QQ WS ESTABLISHED、主动开口循环运行中）
+- ✅ 圣库只读回归：QQ 16 条 + WebChat 1 条完整、视角回填正确、无迁移
+
+---
+
 ## 2026-11-01（傍晚） — v0.6.0 续：主动开口接线 + 情感保护 + 启动效应 + 持久化运行 ✅
 
 按「B9 → A1 → A2 → A3」优先级顺序开工（提交 `320ac36`、`2df93af` 及本轮）：

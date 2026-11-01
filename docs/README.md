@@ -48,7 +48,7 @@
 - **HNSW 索引**：纯标准库实现（M=16 / efConstruction=200 / efSearch=64，id 哈希定层高可复现）；`VectorIndex` 小库精确扫描，≥2000 条自动切换
 - **静态加密**：`EXTRA_BRAIN_ENCRYPTION_PASSPHRASE` 口令（PBKDF2 派生），全表透明加解密。注意：这是混淆级加密，生产建议叠加文件系统加密（BitLocker / LUKS）
 - **遗忘链路**：`forget <id>` 默认 P1 墓碑（清内容留 digest 入审计）；`--hard --yes` 才 P0 物理删除，永不自动执行
-- **CI**：GitHub Actions，Python 3.11/3.12 矩阵 + 88 项单测 + CLI 冒烟
+- **CI**：GitHub Actions，Python 3.11/3.12 矩阵 + 99 项单测 + CLI 冒烟
 
 ### v0.6.0 情感事件状态机接通 + 适配器面板指令
 
@@ -65,6 +65,13 @@
 - **情感记忆保护**（flags.bit6 语义）：`models.is_emotion_protected`——高情绪显著性记忆遗忘曲线放慢 3 倍、保底温层（tier≤1 只封档不改分），永不落冷/归档/墓碑
 - **工作记忆启动效应**：`primed_ids` 贯穿全部检索路径（+0.08 加权 + 候选保送）；`SessionTracker.inject` 滚动 priming——上一轮进入上下文的记忆这一轮更容易被想起
 - **持久化运行**：`scripts/install-autostart.ps1`（计划任务优先，被系统策略挡则回退用户 Startup 无窗口 VBS + 5 分钟看门狗幂等拉起；`-ApiKey` 持久化 User 环境变量，卸载用 `uninstall-autostart.ps1`）
+
+### v0.6.0 收官：多角度视角 + 崩溃安全重建
+
+- **多视角打标**（v0.4.0 遗留清零）：`view` 字段 fact/feeling/bond/story，写入时 `derive_view()` 确定性推导（不依赖模型输出）；旧库加载自动补标（零迁移）；检索/注入/四路召回/sidecar `/inject` / CLI `--view` 全线过滤；去重合并按最终情绪字段重算
+- **崩溃安全影子日志**（v0.3.0 遗留清零）：`session_log` 巩固前落 pending、成功与记忆**同事务**标 done、异常标 failed——LLM 抽取期间崩溃输入不丢
+- **`rebuild from-log --yes`**：从 operation_log after 快照整表重放 + 重算向量（单事务，损坏快照跳过不猜）；**`rebuild replay-pending`**：重放未巩固的影子输入
+- **主动开口已上线**：AstrBot 循环运行中；插件配置在 `data/config/astrbot_plugin_extra_brain_config.json` 的 `proactive_enabled`（注意：不是 cmd_config 的 plugin_store）
 
 运行时只使用 Python 标准库，不依赖外部向量服务；加密、HNSW、真实嵌入全部可选。
 
@@ -221,6 +228,7 @@ extra-brain --db memory.db core --file core.json
 extra-brain --db memory.db core --rollback rev_001
 extra-brain --db memory.db consolidate conversation.txt
 extra-brain --db memory.db search "查询" --entity "实体"
+extra-brain --db memory.db search "查询" --view feeling --view bond
 extra-brain --db memory.db inject "查询" --context-file recent.txt --token-limit 1800
 extra-brain --db memory.db list semantic
 extra-brain --db memory.db list episodic --include-archived
@@ -233,6 +241,8 @@ extra-brain --db memory.db stats                                  # 分层统计
 extra-brain --db memory.db associate sem_20261029_xxx             # 2 跳联想链
 extra-brain --db memory.db audit --limit 50
 extra-brain --db memory.db reindex
+extra-brain --db memory.db rebuild from-log --yes     # 崩溃安全：从审计快照重建派生层
+extra-brain --db memory.db rebuild replay-pending    # 重放影子日志里未完成的巩固输入
 extra-brain --db memory.db chat --threshold 8
 ```
 
@@ -344,7 +354,7 @@ DSH 是 Developer Preview；AstrBot 为活跃维护的成熟框架（支持 QQ �
 
 ## 验证边界
 
-- **离线单测 88 项**（24 项基础 + 12 项 sidecar + 52 项 v0.2–v0.6 新特性）：数据校验、持久化、空抽取与闲聊过滤、去重、冲突修正、七因子保留度与归档、保护与晋升、事务回滚、加权检索与四路召回、注入预算、跨会话情绪召回、人格锚回滚、感觉/工作记忆、只读模式、存储统计、陪伴层五表 CRUD、主动开口决策矩阵、加密密文断言、HNSW 召回、遗忘链路（P1/P0）、情感事件状态机集成（默认 open / 显式推进 / 非法迁移拒绝 / 反漠视不归档 / schema 校验）、sidecar HTTP（per-peer 隔离、错误码、只读降级、/stats、/forget）。Python 3.11/3.12 双版本 CI 全绿（GitHub Actions）。
+- **离线单测 99 项**（24 项基础 + 12 项 sidecar + 63 项 v0.2–v0.6 新特性）：数据校验、持久化、空抽取与闲聊过滤、去重、冲突修正、七因子保留度与归档、保护与晋升、事务回滚、加权检索与四路召回、注入预算、跨会话情绪召回、人格锚回滚、感觉/工作记忆、只读模式、存储统计、陪伴层五表 CRUD、主动开口决策矩阵、加密密文断言、HNSW 召回、遗忘链路（P1/P0）、情感事件状态机集成（默认 open / 显式推进 / 非法迁移拒绝 / 反漠视不归档 / schema 校验）、sidecar HTTP（per-peer 隔离、错误码、只读降级、/stats、/forget）。Python 3.11/3.12 双版本 CI 全绿（GitHub Actions）。
 - **向后兼容**：v0.5.0 代码以只读方式完整加载 AstrBot 运行期的旧 `.db`（QQ 15 条 + WebChat 1 条）验证通过，新字段全部缺省安全，无需迁移。
 - **端到端**：AstrBot + WebChatUI 跨会话暗号、AstrBot + QQ 跨上下文暗号均验证通过；v0.5.0 重启后在真实 QQ 库上「新增暗号写入 + 跨 reset 召回 + 旧记忆零丢失」四步回归通过，七因子分档在真实数据上生效（高激活记忆落 P5，新写入落 P4）。
 
