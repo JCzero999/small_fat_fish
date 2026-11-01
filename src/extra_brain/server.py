@@ -54,10 +54,14 @@ class ExtraBrainServer:
         *,
         extractor: MemoryExtractor | None = None,
         config: MemoryConfig | None = None,
+        read_only: bool = False,
+        encryption_passphrase: str | None = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.config = config or MemoryConfig()
         self.extractor = extractor
+        self.read_only = bool(read_only)
+        self.encryption_passphrase = encryption_passphrase
         self._brains: dict[str, ExtraBrain] = {}
         self._lock = threading.RLock()
 
@@ -80,6 +84,8 @@ class ExtraBrainServer:
                     self.data_dir / f"{peer_id}.db",
                     extractor=self.extractor,
                     config=self.config,
+                    read_only=self.read_only,
+                    encryption_passphrase=self.encryption_passphrase,
                 )
                 self._brains[peer_id] = brain
             return brain
@@ -103,11 +109,17 @@ class ExtraBrainServer:
         if method == "GET" and route == "/list":
             return self._list(_peer(query), query.get("kind", "semantic"))
 
+        if method == "GET" and route == "/stats":
+            return self._brain(_peer(query)).storage_stats()
+
         if method == "POST" and route == "/inject":
             return self._inject(body)
 
         if method == "POST" and route == "/consolidate":
             return self._consolidate(body)
+
+        if method == "POST" and route == "/forget":
+            return self._forget(body)
 
         raise _HttpError(HTTPStatus.NOT_FOUND, f"unknown route {method} {route}")
 
@@ -138,10 +150,10 @@ class ExtraBrainServer:
         }
 
     def _consolidate(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        if self.extractor is None:
+        if self.extractor is None or self.read_only:
             raise _HttpError(
                 HTTPStatus.SERVICE_UNAVAILABLE,
-                "no extractor configured (DEEPSEEK_API_KEY not set)",
+                "read-only mode: no extractor configured (DEEPSEEK_API_KEY not set)",
             )
         peer_id = _peer(body)
         messages = body.get("messages")
@@ -161,6 +173,21 @@ class ExtraBrainServer:
                 normalized, session_id=session_id, now=now
             )
         result = report.to_dict()
+        result["peer_id"] = peer_id
+        return result
+
+    def _forget(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        peer_id = _peer(body)
+        memory_id = _string(body.get("memory_id"), "memory_id")
+        hard = bool(body.get("hard", False))
+        approved = bool(body.get("approved", False))
+        with self._lock:
+            try:
+                result = self._brain(peer_id).forget(
+                    memory_id, hard=hard, approved=approved
+                )
+            except PermissionError as exc:
+                raise _HttpError(HTTPStatus.FORBIDDEN, str(exc)) from exc
         result["peer_id"] = peer_id
         return result
 
@@ -282,12 +309,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--data-dir", default="extra-brain")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8756)
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="只读模式：拒绝 /consolidate 与 /forget 写入（v0.3.0+）",
+    )
+    parser.add_argument(
+        "--encryption-passphrase",
+        default=None,
+        help="静态加密口令（v0.5.0）；默认读取 EXTRA_BRAIN_ENCRYPTION_PASSPHRASE 环境变量",
+    )
     args = parser.parse_args(argv)
 
-    app = ExtraBrainServer.from_env(args.data_dir)
+    app = ExtraBrainServer(
+        args.data_dir,
+        extractor=None if args.read_only else _default_extractor(),
+        read_only=args.read_only,
+        encryption_passphrase=args.encryption_passphrase,
+    )
     server = ThreadingHTTPServer((args.host, args.port), _Handler)
     server.app = app  # type: ignore[attr-defined]
-    mode = "read-write" if app.extractor is not None else "read-only (no DEEPSEEK_API_KEY)"
+    mode = (
+        "read-only (explicit)"
+        if args.read_only
+        else "read-write"
+        if app.extractor is not None
+        else "read-only (no DEEPSEEK_API_KEY)"
+    )
     print(f"extra_brain sidecar listening on http://{args.host}:{args.port} [{mode}]")
     print(f"data dir: {Path(args.data_dir).resolve()}")
     try:
@@ -298,6 +346,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         server.server_close()
         app.close()
     return 0
+
+
+def _default_extractor() -> MemoryExtractor | None:
+    try:
+        return OpenAICompatibleExtractor.from_env()
+    except ExtractionError:
+        return None
 
 
 if __name__ == "__main__":

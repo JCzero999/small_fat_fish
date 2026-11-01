@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import sqlite3
 import threading
 from dataclasses import dataclass, field
@@ -14,11 +16,30 @@ from .models import (
     CoreMemory,
     EpisodicMemory,
     Memory,
+    MemoryAssociation,
+    NarrativeLayer,
+    ProactiveConfig,
+    RelationshipModel,
     SemanticMemory,
     StyleMemory,
+    UserSchema,
     to_iso8601,
     utc_now,
 )
+
+
+def _derive_key(passphrase: str, salt: bytes) -> bytes:
+    """v0.5.0: 从口令和盐派生加密密钥（PBKDF2-HMAC-SHA256，32 字节）。"""
+    return hashlib.pbkdf2_hmac("sha256", passphrase.encode("utf-8"), salt, 100_000, dklen=32)
+
+
+def _xor_crypt(data: bytes, key: bytes) -> bytes:
+    """v0.5.0: 循环密钥 XOR 加/解密（对称，可逆）。
+
+    注意：这是静态混淆级加密，非 AES 级强密码。生产环境建议配合
+    文件系统加密（BitLocker / FileVault / LUKS）或数据库加密扩展使用。
+    """
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
 
 
 @dataclass(slots=True)
@@ -36,10 +57,33 @@ class WriteBatch:
 class MemoryStore:
     """SQLite persistence. A batch, its vectors, and its audit records commit together."""
 
-    def __init__(self, path: str | Path, *, core_token_limit: int = 1200) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        core_token_limit: int = 1200,
+        encryption_passphrase: str | None = None,
+    ) -> None:
         self.path = str(path)
         self.core_token_limit = core_token_limit
         self._lock = threading.RLock()
+        self._encryption_passphrase = encryption_passphrase or os.environ.get(
+            "EXTRA_BRAIN_ENCRYPTION_PASSPHRASE", ""
+        )
+        self._salt: bytes | None = None
+        self._key: bytes | None = None
+        if self._encryption_passphrase:
+            salt_path = Path(self.path).with_suffix(Path(self.path).suffix + ".salt")
+            if salt_path.exists():
+                self._salt = salt_path.read_bytes()
+            else:
+                self._salt = os.urandom(16)
+                try:
+                    salt_path.write_bytes(self._salt)
+                except OSError:
+                    self._salt = None
+            if self._salt is not None:
+                self._key = _derive_key(self._encryption_passphrase, self._salt)
         self._connection = sqlite3.connect(self.path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
@@ -198,6 +242,24 @@ class MemoryStore:
                 """
             )
 
+    def _encrypt(self, plaintext: str) -> str:
+        """v0.5.0: 如果启用了静态加密，对明文进行 XOR 混淆并返回 Base64。"""
+        if self._key is None:
+            return plaintext
+        import base64
+
+        encrypted = _xor_crypt(plaintext.encode("utf-8"), self._key)
+        return base64.b64encode(encrypted).decode("ascii")
+
+    def _decrypt(self, ciphertext: str) -> str:
+        """v0.5.0: 如果启用了静态加密，从 Base64 解码并 XOR 还原明文。"""
+        if self._key is None:
+            return ciphertext
+        import base64
+
+        encrypted = base64.b64decode(ciphertext.encode("ascii"))
+        return _xor_crypt(encrypted, self._key).decode("utf-8")
+
     def close(self) -> None:
         with self._lock:
             self._connection.close()
@@ -213,7 +275,7 @@ class MemoryStore:
             row = self._connection.execute(
                 "SELECT data FROM core_memory WHERE singleton = 1"
             ).fetchone()
-        return CoreMemory.from_dict(json.loads(row["data"])) if row else CoreMemory()
+        return CoreMemory.from_dict(json.loads(self._decrypt(row["data"]))) if row else CoreMemory()
 
     def save_core(self, core: CoreMemory) -> None:
         self.apply_batch(WriteBatch(core=core, operation="core.write"))
@@ -222,13 +284,13 @@ class MemoryStore:
         row = self._connection.execute(
             "SELECT data FROM semantic_memories WHERE id = ?", (memory_id,)
         ).fetchone()
-        return SemanticMemory.from_dict(json.loads(row["data"])) if row else None
+        return SemanticMemory.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def get_episodic(self, memory_id: str) -> EpisodicMemory | None:
         row = self._connection.execute(
             "SELECT data FROM episodic_memories WHERE id = ?", (memory_id,)
         ).fetchone()
-        return EpisodicMemory.from_dict(json.loads(row["data"])) if row else None
+        return EpisodicMemory.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def get_memory(self, memory_id: str) -> Memory | None:
         return self.get_semantic(memory_id) or self.get_episodic(memory_id)
@@ -259,7 +321,7 @@ class MemoryStore:
             )
         )
         with self._lock, self._connection:
-            data = _to_json(model.to_dict())
+            data = self._encrypt(_to_json(model.to_dict()))
             before = self._connection.execute(
                 "SELECT data FROM relationship_models WHERE id = ?", (model.id,)
             ).fetchone()
@@ -313,21 +375,21 @@ class MemoryStore:
             row = self._connection.execute(
                 "SELECT data FROM relationship_models WHERE id = ?", (model_id,)
             ).fetchone()
-        return RelationshipModel.from_dict(json.loads(row["data"])) if row else None
+        return RelationshipModel.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def get_relationship_by_user(self, user_id: str) -> RelationshipModel | None:
         with self._lock:
             row = self._connection.execute(
                 "SELECT data FROM relationship_models WHERE user_id = ?", (user_id,)
             ).fetchone()
-        return RelationshipModel.from_dict(json.loads(row["data"])) if row else None
+        return RelationshipModel.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def list_relationships(self) -> list[RelationshipModel]:
         with self._lock:
             rows = self._connection.execute(
                 "SELECT data FROM relationship_models ORDER BY id"
             ).fetchall()
-        return [RelationshipModel.from_dict(json.loads(row["data"])) for row in rows]
+        return [RelationshipModel.from_dict(json.loads(self._decrypt(row["data"]))) for row in rows]
 
     def save_user_schema(self, schema: UserSchema) -> None:
         self.apply_batch(
@@ -338,24 +400,19 @@ class MemoryStore:
             )
         )
         with self._lock, self._connection:
-            data = _to_json(schema.to_dict())
+            data = self._encrypt(_to_json(schema.to_dict()))
             before = self._connection.execute(
                 "SELECT data FROM user_schemas WHERE id = ?", (schema.id,)
             ).fetchone()
             self._connection.execute(
                 """
                 INSERT INTO user_schemas(
-                    id, user_id, schema_type, traits, emotional_patterns,
-                    preferred_topics, avoided_topics, confidence,
+                    id, user_id, schema_type, confidence,
                     last_updated, observation_count, created_at, data
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     user_id = excluded.user_id,
                     schema_type = excluded.schema_type,
-                    traits = excluded.traits,
-                    emotional_patterns = excluded.emotional_patterns,
-                    preferred_topics = excluded.preferred_topics,
-                    avoided_topics = excluded.avoided_topics,
                     confidence = excluded.confidence,
                     last_updated = excluded.last_updated,
                     observation_count = excluded.observation_count,
@@ -366,10 +423,6 @@ class MemoryStore:
                     schema.id,
                     schema.user_id,
                     schema.schema_type,
-                    json.dumps(schema.traits, ensure_ascii=False),
-                    json.dumps(schema.emotional_patterns, ensure_ascii=False),
-                    json.dumps(schema.preferred_topics, ensure_ascii=False),
-                    json.dumps(schema.avoided_topics, ensure_ascii=False),
                     schema.confidence,
                     schema.last_updated,
                     schema.observation_count,
@@ -390,21 +443,21 @@ class MemoryStore:
             row = self._connection.execute(
                 "SELECT data FROM user_schemas WHERE id = ?", (schema_id,)
             ).fetchone()
-        return UserSchema.from_dict(json.loads(row["data"])) if row else None
+        return UserSchema.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def get_user_schema_by_user(self, user_id: str) -> UserSchema | None:
         with self._lock:
             row = self._connection.execute(
                 "SELECT data FROM user_schemas WHERE user_id = ?", (user_id,)
             ).fetchone()
-        return UserSchema.from_dict(json.loads(row["data"])) if row else None
+        return UserSchema.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def list_user_schemas(self) -> list[UserSchema]:
         with self._lock:
             rows = self._connection.execute(
                 "SELECT data FROM user_schemas ORDER BY id"
             ).fetchall()
-        return [UserSchema.from_dict(json.loads(row["data"])) for row in rows]
+        return [UserSchema.from_dict(json.loads(self._decrypt(row["data"]))) for row in rows]
 
     def save_narrative(self, narrative: NarrativeLayer) -> None:
         self.apply_batch(
@@ -415,21 +468,20 @@ class MemoryStore:
             )
         )
         with self._lock, self._connection:
-            data = _to_json(narrative.to_dict())
+            data = self._encrypt(_to_json(narrative.to_dict()))
             before = self._connection.execute(
                 "SELECT data FROM narrative_layers WHERE id = ?", (narrative.id,)
             ).fetchone()
             self._connection.execute(
                 """
                 INSERT INTO narrative_layers(
-                    id, user_id, phase, theme, event_ids, summary,
+                    id, user_id, phase, theme, summary,
                     last_updated, created_at, data
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     user_id = excluded.user_id,
                     phase = excluded.phase,
                     theme = excluded.theme,
-                    event_ids = excluded.event_ids,
                     summary = excluded.summary,
                     last_updated = excluded.last_updated,
                     created_at = excluded.created_at,
@@ -440,7 +492,6 @@ class MemoryStore:
                     narrative.user_id,
                     narrative.phase,
                     narrative.theme,
-                    json.dumps(narrative.event_ids, ensure_ascii=False),
                     narrative.summary,
                     narrative.last_updated,
                     narrative.created_at,
@@ -460,21 +511,21 @@ class MemoryStore:
             row = self._connection.execute(
                 "SELECT data FROM narrative_layers WHERE id = ?", (narrative_id,)
             ).fetchone()
-        return NarrativeLayer.from_dict(json.loads(row["data"])) if row else None
+        return NarrativeLayer.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def get_narrative_by_user(self, user_id: str) -> NarrativeLayer | None:
         with self._lock:
             row = self._connection.execute(
                 "SELECT data FROM narrative_layers WHERE user_id = ?", (user_id,)
             ).fetchone()
-        return NarrativeLayer.from_dict(json.loads(row["data"])) if row else None
+        return NarrativeLayer.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def list_narratives(self) -> list[NarrativeLayer]:
         with self._lock:
             rows = self._connection.execute(
                 "SELECT data FROM narrative_layers ORDER BY id"
             ).fetchall()
-        return [NarrativeLayer.from_dict(json.loads(row["data"])) for row in rows]
+        return [NarrativeLayer.from_dict(json.loads(self._decrypt(row["data"]))) for row in rows]
 
     def save_association(self, association: MemoryAssociation) -> None:
         self.apply_batch(
@@ -485,7 +536,7 @@ class MemoryStore:
             )
         )
         with self._lock, self._connection:
-            data = _to_json(association.to_dict())
+            data = self._encrypt(_to_json(association.to_dict()))
             before = self._connection.execute(
                 "SELECT data FROM memory_associations WHERE id = ?", (association.id,)
             ).fetchone()
@@ -528,7 +579,7 @@ class MemoryStore:
             row = self._connection.execute(
                 "SELECT data FROM memory_associations WHERE id = ?", (association_id,)
             ).fetchone()
-        return MemoryAssociation.from_dict(json.loads(row["data"])) if row else None
+        return MemoryAssociation.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def list_associations_for_memory(self, memory_id: str) -> list[MemoryAssociation]:
         with self._lock:
@@ -540,7 +591,7 @@ class MemoryStore:
                 """,
                 (memory_id, memory_id),
             ).fetchall()
-        return [MemoryAssociation.from_dict(json.loads(row["data"])) for row in rows]
+        return [MemoryAssociation.from_dict(json.loads(self._decrypt(row["data"]))) for row in rows]
 
     def save_proactive_config(self, config: ProactiveConfig) -> None:
         self.apply_batch(
@@ -551,7 +602,7 @@ class MemoryStore:
             )
         )
         with self._lock, self._connection:
-            data = _to_json(config.to_dict())
+            data = self._encrypt(_to_json(config.to_dict()))
             before = self._connection.execute(
                 "SELECT data FROM proactive_configs WHERE id = ?", (config.id,)
             ).fetchone()
@@ -605,21 +656,21 @@ class MemoryStore:
             row = self._connection.execute(
                 "SELECT data FROM proactive_configs WHERE id = ?", (config_id,)
             ).fetchone()
-        return ProactiveConfig.from_dict(json.loads(row["data"])) if row else None
+        return ProactiveConfig.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def get_proactive_config_by_user(self, user_id: str) -> ProactiveConfig | None:
         with self._lock:
             row = self._connection.execute(
                 "SELECT data FROM proactive_configs WHERE user_id = ?", (user_id,)
             ).fetchone()
-        return ProactiveConfig.from_dict(json.loads(row["data"])) if row else None
+        return ProactiveConfig.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
 
     def list_proactive_configs(self) -> list[ProactiveConfig]:
         with self._lock:
             rows = self._connection.execute(
                 "SELECT data FROM proactive_configs ORDER BY id"
             ).fetchall()
-        return [ProactiveConfig.from_dict(json.loads(row["data"])) for row in rows]
+        return [ProactiveConfig.from_dict(json.loads(self._decrypt(row["data"]))) for row in rows]
 
     def list_semantic(self, *, include_archived: bool = False) -> list[SemanticMemory]:
         query = "SELECT data FROM semantic_memories"
@@ -628,7 +679,7 @@ class MemoryStore:
         query += " ORDER BY id"
         with self._lock:
             rows = self._connection.execute(query).fetchall()
-        memories = [SemanticMemory.from_dict(json.loads(row["data"])) for row in rows]
+        memories = [SemanticMemory.from_dict(json.loads(self._decrypt(row["data"]))) for row in rows]
         return sorted(memories, key=lambda item: (item.created_at, item.id))
 
     def list_episodic(self, *, include_archived: bool = False) -> list[EpisodicMemory]:
@@ -638,13 +689,13 @@ class MemoryStore:
         query += " ORDER BY id"
         with self._lock:
             rows = self._connection.execute(query).fetchall()
-        memories = [EpisodicMemory.from_dict(json.loads(row["data"])) for row in rows]
+        memories = [EpisodicMemory.from_dict(json.loads(self._decrypt(row["data"]))) for row in rows]
         return sorted(memories, key=lambda item: (item.timestamp, item.id))
 
     def list_style(self) -> list[StyleMemory]:
         with self._lock:
             rows = self._connection.execute("SELECT data FROM style_memories ORDER BY id").fetchall()
-        return [StyleMemory.from_dict(json.loads(row["data"])) for row in rows]
+        return [StyleMemory.from_dict(json.loads(self._decrypt(row["data"]))) for row in rows]
 
     def get_vectors(
         self, memory_type: str, *, model: str, dimensions: int
@@ -658,7 +709,7 @@ class MemoryStore:
                 (memory_type, model, dimensions),
             ).fetchall()
         return {
-            row["memory_id"]: tuple(float(value) for value in json.loads(row["values_json"]))
+            row["memory_id"]: tuple(float(value) for value in json.loads(self._decrypt(row["values_json"])))
             for row in rows
         }
 
@@ -670,7 +721,7 @@ class MemoryStore:
                 before_row = self._connection.execute(
                     "SELECT data FROM core_memory WHERE singleton = 1"
                 ).fetchone()
-                data = _to_json(batch.core.to_dict())
+                data = self._encrypt(_to_json(batch.core.to_dict()))
                 self._connection.execute(
                     """
                     INSERT INTO core_memory(singleton, data) VALUES (1, ?)
@@ -702,14 +753,14 @@ class MemoryStore:
                     batch.transaction_id,
                     None,
                     None,
-                    _to_json(batch.audit_details),
+                    self._encrypt(_to_json(batch.audit_details)),
                 )
 
     def _write_semantic(self, batch: WriteBatch, memory: SemanticMemory) -> None:
         before = self._connection.execute(
             "SELECT data FROM semantic_memories WHERE id = ?", (memory.id,)
         ).fetchone()
-        data = _to_json(memory.to_dict())
+        data = self._encrypt(_to_json(memory.to_dict()))
         self._connection.execute(
             """
             INSERT INTO semantic_memories(
@@ -746,7 +797,7 @@ class MemoryStore:
         before = self._connection.execute(
             "SELECT data FROM episodic_memories WHERE id = ?", (memory.id,)
         ).fetchone()
-        data = _to_json(memory.to_dict())
+        data = self._encrypt(_to_json(memory.to_dict()))
         self._connection.execute(
             """
             INSERT INTO episodic_memories(
@@ -779,7 +830,7 @@ class MemoryStore:
         before = self._connection.execute(
             "SELECT data FROM style_memories WHERE id = ?", (memory.id,)
         ).fetchone()
-        data = _to_json(memory.to_dict())
+        data = self._encrypt(_to_json(memory.to_dict()))
         self._connection.execute(
             """
             INSERT INTO style_memories(id, category, importance, last_observed, data)
@@ -810,7 +861,7 @@ class MemoryStore:
                 entry.memory_type,
                 entry.model,
                 entry.dimensions,
-                json.dumps(entry.values, separators=(",", ":")),
+                self._encrypt(json.dumps(entry.values, separators=(",", ":"))),
             ),
         )
 
@@ -887,6 +938,80 @@ class MemoryStore:
             batch.episodic.append(memory)
         self.apply_batch(batch)
 
+    def tombstone(self, memory_id: str) -> dict[str, Any]:
+        """v0.5.0 P1 墓碑：只保留 id + digest + 理由，释放其余内容。
+
+        这是六档处置的最后一档自动操作；物理删除（P0）需要显式审批，
+        走 hard_delete()。
+        """
+        memory = self.get_memory(memory_id)
+        if memory is None:
+            raise KeyError(memory_id)
+        digest = memory.embedding_text()[:120]
+        batch = WriteBatch(operation="memory.tombstone")
+        memory.archived = True
+        memory.retention_tier = 4
+        memory.decay_score = 0.0
+        if isinstance(memory, SemanticMemory):
+            memory.detail = "[已墓碑化]"
+            memory.object = "[已墓碑化]"
+            batch.semantic.append(memory)
+        else:
+            memory.summary = "[已墓碑化]"
+            memory.key_moments = []
+            memory.emotions = []
+            batch.episodic.append(memory)
+        self.apply_batch(batch)
+        return {
+            "id": memory_id,
+            "digest": digest,
+            "operation": "tombstone",
+        }
+
+    def hard_delete(self, memory_id: str, *, approved: bool = False) -> dict[str, Any]:
+        """v0.5.0 P0 物理删除：永不自动执行，必须显式 approved=True。
+
+        删除前先把 digest/理由写入审计日志，保证「为什么忘了」可追溯。
+        """
+        if not approved:
+            raise PermissionError(
+                "物理删除（P0）需要显式审批：传入 approved=True 或 CLI 加 --yes"
+            )
+        memory = self.get_memory(memory_id)
+        if memory is None:
+            raise KeyError(memory_id)
+        digest = memory.embedding_text()[:120]
+        table = (
+            "semantic_memories"
+            if isinstance(memory, SemanticMemory)
+            else "episodic_memories"
+        )
+        batch = WriteBatch(
+            operation="memory.hard_delete",
+            audit_details={"id": memory_id, "digest": digest, "reason": "approved_physical_delete"},
+        )
+        with self._lock, self._connection:
+            self._connection.execute(f"DELETE FROM {table} WHERE id = ?", (memory_id,))
+            self._connection.execute(
+                "DELETE FROM memory_vectors WHERE memory_id = ?", (memory_id,)
+            )
+            self._connection.execute(
+                "DELETE FROM memory_associations"
+                " WHERE source_memory_id = ? OR target_memory_id = ?",
+                (memory_id, memory_id),
+            )
+            self._audit(batch, "memory", memory_id, None, None)
+            if batch.audit_details is not None:
+                self._audit(
+                    batch,
+                    "hard_delete",
+                    memory_id,
+                    None,
+                    None,
+                    self._encrypt(_to_json(batch.audit_details)),
+                )
+        return {"id": memory_id, "digest": digest, "operation": "hard_delete"}
+
     def list_audit(self, *, limit: int = 100) -> list[dict[str, Any]]:
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             raise ValueError("limit must be a positive integer")
@@ -905,9 +1030,9 @@ class MemoryStore:
                 "operation": row["operation"],
                 "entity_type": row["entity_type"],
                 "entity_id": row["entity_id"],
-                "before": json.loads(row["before_json"]) if row["before_json"] else None,
-                "after": json.loads(row["after_json"]) if row["after_json"] else None,
-                "details": json.loads(row["details_json"]) if row["details_json"] else None,
+                "before": json.loads(self._decrypt(row["before_json"])) if row["before_json"] else None,
+                "after": json.loads(self._decrypt(row["after_json"])) if row["after_json"] else None,
+                "details": json.loads(self._decrypt(row["details_json"])) if row["details_json"] else None,
             }
             for row in rows
         ]

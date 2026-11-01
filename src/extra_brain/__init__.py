@@ -1,6 +1,16 @@
 from .config import MemoryConfig
 from .consolidation import ConsolidationReport, calculate_decay
-from .embeddings import EmbeddingProvider, LocalHashingEmbedder, MemoryIndexer
+from .embeddings import (
+    EmbeddingProvider,
+    HNSWIndex,
+    LocalHashingEmbedder,
+    MemoryIndexer,
+    OpenAICompatibleEmbedder,
+    VectorEntry,
+    VectorIndex,
+    build_vector_index,
+    cosine_similarity,
+)
 from .engine import ExtraBrain
 from .extraction import (
     ConversationMessage,
@@ -15,9 +25,14 @@ from .models import (
     CoreMemoryLimitError,
     EpisodicMemory,
     Identity,
+    MemoryAssociation,
     MemoryValidationError,
+    NarrativeLayer,
+    ProactiveConfig,
+    RelationshipModel,
     SemanticMemory,
     StyleMemory,
+    UserSchema,
     UserStableProfile,
 )
 from .retrieval import Injection, MemoryRetriever, RetrievalResult, ScoredMemory
@@ -35,24 +50,35 @@ __all__ = [
     "ExtraBrain",
     "ExtractionError",
     "ExtractionResult",
+    "HNSWIndex",
     "Identity",
     "Injection",
     "LocalHashingEmbedder",
+    "MemoryAssociation",
     "MemoryConfig",
     "MemoryExtractor",
     "MemoryIndexer",
     "MemoryRetriever",
     "MemoryStore",
     "MemoryValidationError",
+    "NarrativeLayer",
+    "OpenAICompatibleEmbedder",
     "OpenAICompatibleExtractor",
+    "ProactiveConfig",
+    "RelationshipModel",
     "RetrievalResult",
     "ScoredMemory",
     "SemanticMemory",
     "SessionTracker",
     "StyleMemory",
+    "UserSchema",
     "UserStableProfile",
+    "VectorEntry",
+    "VectorIndex",
     "WriteBatch",
+    "build_vector_index",
     "calculate_decay",
+    "cosine_similarity",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.5.0"

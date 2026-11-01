@@ -10,7 +10,7 @@ from typing import Any, Sequence
 from .config import MemoryConfig
 from .engine import ExtraBrain
 from .extraction import ExtractionError, OpenAICompatibleExtractor
-from .models import CoreMemory, MemoryValidationError
+from .models import CoreMemory, MemoryValidationError, to_iso8601, utc_now
 from .session import SessionTracker
 
 
@@ -55,6 +55,19 @@ def build_parser() -> argparse.ArgumentParser:
     protect = commands.add_parser("protect", help="将记忆加入/移出 Core 保护列表")
     protect.add_argument("memory_id")
     protect.add_argument("--remove", action="store_true")
+
+    # v0.5.0 遗忘链路：默认归档+墓碑（P1），物理删除（P0）需 --hard --yes 显式审批
+    forget = commands.add_parser("forget", help="遗忘记忆（默认 P1 墓碑化；--hard --yes 才物理删除）")
+    forget.add_argument("memory_id")
+    forget.add_argument("--hard", action="store_true", help="物理删除（P0），需配合 --yes")
+    forget.add_argument("--yes", action="store_true", help="显式审批物理删除")
+
+    # v0.5.0 存储分层统计
+    commands.add_parser("stats", help="查看记忆库分层统计（保留度档位/归档比例）")
+
+    # v0.5.0 记忆联想：打印 2 跳联想链
+    associate = commands.add_parser("associate", help="查看某条记忆的 2 跳联想链")
+    associate.add_argument("memory_id")
 
     audit = commands.add_parser("audit", help="查看操作审计与 before/after 快照")
     audit.add_argument("--limit", type=int, default=50)
@@ -138,6 +151,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "protect":
             brain.store.set_protected(args.memory_id, not args.remove)
             _print_json(brain.core.to_dict())
+        elif args.command == "forget":
+            result = brain.forget(
+                args.memory_id, hard=args.hard, approved=args.yes
+            )
+            _print_json(result)
+        elif args.command == "stats":
+            _print_json(brain.storage_stats())
+        elif args.command == "associate":
+            _print_json(_association_chain(brain, args.memory_id))
         elif args.command == "audit":
             _print_json(brain.store.list_audit(limit=args.limit))
         elif args.command == "reindex":
@@ -145,7 +167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "chat":
             return _run_chat(brain, args.threshold, auto=not args.no_auto)
         return 0
-    except (ExtractionError, MemoryValidationError, OSError, KeyError, ValueError) as exc:
+    except (ExtractionError, MemoryValidationError, OSError, KeyError, ValueError, PermissionError) as exc:
         print(f"extra-brain: {exc}", file=sys.stderr)
         return 1
     finally:
@@ -155,6 +177,44 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _print_json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def _association_chain(brain: ExtraBrain, memory_id: str, *, max_hops: int = 2) -> dict[str, Any]:
+    """v0.5.0 /memory associate：从一条记忆出发打印 2 跳联想链。"""
+    memory = brain.store.get_memory(memory_id)
+    if memory is None:
+        raise KeyError(memory_id)
+    seen = {memory_id}
+    frontier = [memory_id]
+    hops: list[list[dict[str, Any]]] = []
+    for _ in range(max_hops):
+        next_frontier: list[str] = []
+        layer: list[dict[str, Any]] = []
+        for current in frontier:
+            for association in brain.list_associations_for_memory(current):
+                neighbor_id = (
+                    association.target_memory_id
+                    if association.source_memory_id == current
+                    else association.source_memory_id
+                )
+                if neighbor_id in seen:
+                    continue
+                seen.add(neighbor_id)
+                neighbor = brain.store.get_memory(neighbor_id)
+                layer.append(
+                    {
+                        "id": neighbor_id,
+                        "strength": association.strength,
+                        "digest": neighbor.embedding_text()[:80] if neighbor else "",
+                    }
+                )
+                next_frontier.append(neighbor_id)
+        if not layer:
+            break
+        layer.sort(key=lambda item: item["strength"], reverse=True)
+        hops.append(layer)
+        frontier = next_frontier
+    return {"from": memory_id, "hops": hops}
 
 
 def _run_chat(brain: ExtraBrain, threshold: int, *, auto: bool) -> int:

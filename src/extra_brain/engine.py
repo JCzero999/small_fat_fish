@@ -41,11 +41,16 @@ class ExtraBrain:
         embedder: EmbeddingProvider | None = None,
         config: MemoryConfig | None = None,
         read_only: bool = False,
+        encryption_passphrase: str | None = None,
     ) -> None:
         self.config = config or MemoryConfig()
         self.read_only = bool(read_only)
         self.embedder = embedder or LocalHashingEmbedder(self.config.embedding_dimensions)
-        self.store = MemoryStore(db_path, core_token_limit=self.config.core_token_limit)
+        self.store = MemoryStore(
+            db_path,
+            core_token_limit=self.config.core_token_limit,
+            encryption_passphrase=encryption_passphrase,
+        )
         self.indexer = MemoryIndexer(self.embedder)
         self.retriever = MemoryRetriever(self.store, self.embedder, self.config)
         self.extractor = extractor
@@ -79,6 +84,14 @@ class ExtraBrain:
     def storage_stats(self) -> dict[str, Any]:
         """返回数据库分层统计（保留度档位、归档比例等）。"""
         return self.store.storage_stats()
+
+    def forget(self, memory_id: str, *, hard: bool = False, approved: bool = False) -> dict[str, Any]:
+        """v0.5.0 遗忘链路：默认归档+墓碑（P1），hard=True 且 approved=True 才物理删除（P0）。"""
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        if hard:
+            return self.store.hard_delete(memory_id, approved=approved)
+        return self.store.tombstone(memory_id)
 
     def consolidate(
         self,
@@ -140,9 +153,11 @@ class ExtraBrain:
             self.core, retrieved, token_limit=token_limit
         )
         # Only memories that actually fit into the injected context count as activated.
-        self.store.record_activations(
-            injection.retrieved.memory_ids, now=now or utc_now()
-        )
+        # 只读模式下跳过激活写入。
+        if not self.read_only:
+            self.store.record_activations(
+                injection.retrieved.memory_ids, now=now or utc_now()
+            )
         return injection
 
     def reindex(self) -> int:

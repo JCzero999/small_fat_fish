@@ -4,6 +4,54 @@
 
 ---
 
+## 2026-11-01 — extra_brain v0.2.0 → v0.5.0 五连跳迭代 ✅
+
+按 `docs/MEMORY_ITERATION_PLAN.md` 路线图，一次会话内完成全部规划特性。单测从 30 项扩到 **68 项**，全绿；数据库新字段全部向后兼容（旧 `.db` 直接可读）。
+
+### v0.2.0 — 双时态版本链 + 人格锚版本 + 情感状态机 ✅
+- ✅ `SemanticMemory`/`EpisodicMemory` 新增 `valid_from`/`valid_to`/`supersedes`：事实可过期、可成版本链
+- ✅ 检索支持 `as_of` 时间点查询：能回答「上周我们认为用户喝什么」而不仅是「现在」
+- ✅ `CoreMemory` 新增 `persona_anchor_version`/`persona_anchor_history`，CLI `core --rollback <rev>` 人格锚回滚
+- ✅ `EpisodicMemory.emotion_state` 五态状态机（open/acknowledged/attended/resolved/dormant）
+
+### v0.2.1 — 感觉记忆 + 工作记忆 ✅
+- ✅ `SessionTracker.sensory_ring`：最近 N 轮对话环形缓冲（默认 2 轮，不落盘）
+- ✅ `SessionTracker.working_set`：本轮触及记忆 ID 集合（上限 16，turn 结束清空），为下轮启动效应铺路
+
+### v0.2.2 — 七因子保留度 + 六档处置 ✅
+- ✅ `_calculate_retention_score`：ACT-R 激活 + 重要度 + 情绪 + 关联 + 叙事 + 锚定 + 间隔，减冗余，带陈旧包络（30 天宽限 / 730 天地板）
+- ✅ `retention_tier` 六档：P5 保持 / P4 压缩 / P3 摘要 / P2 归档 / P1 墓碑；P0 物理删除需显式审批（v0.5.0 落地）
+- ✅ protected 记忆评分恒 1.0，永不归档
+
+### v0.3.0 — 四路召回 + 只读模式 + 存储统计 ✅
+- ✅ `search_four_paths`：A 语义相似 / B 关键词实体 / C 情绪共鸣 / D 时间快照，可单路可融合
+- ✅ `ExtraBrain(read_only=True)`：拒绝 consolidate / forget / 激活写入
+- ✅ `storage_stats()`：各层数量、保留度档位分布、归档比例、DB 体积
+
+### v0.4.0 — 陪伴层：关系模型 / 用户图式 / 叙事层 / 联想边 / 主动开口 ✅
+- ✅ `RelationshipModel`：亲近度/信任/熟悉度持久化，重启不忘（慢环落库）
+- ✅ `UserSchema`：离线抽象的稳定画像（特质/情感模式/偏好与回避话题）
+- ✅ `NarrativeLayer`：五阶段（亲近期→磨合期→摩擦期→稳定期→冷淡期）+ 主题 + 事件引用，回答「我们是什么关系」
+- ✅ `MemoryAssociation`：Hebbian 共激活联想边，`extra-brain associate <id>` 打印 2 跳联想链
+- ✅ `ProactiveConfig` + `should_proactive_open()`：安静时段/最小间隔/每日上限/静默阈值四维决策，只生成「由头」，台词交给模型
+- ✅ 五张新 SQLite 表 + 全量 CRUD + 审计
+
+### v0.5.0 — 真实嵌入 + HNSW + 静态加密 + 物理删除审批 + CI ✅
+- ✅ `OpenAICompatibleEmbedder`：接宿主 embedding API，失败自动降级本地哈希向量（零硬依赖）
+- ✅ 纯标准库 `HNSWIndex`（M=16/efConstruction=200/efSearch=64，id 哈希定层高可复现）；`VectorIndex` 小库精确扫描、≥2000 条自动切 HNSW
+- ✅ 静态加密：`EXTRA_BRAIN_ENCRYPTION_PASSPHRASE` / `--encryption-passphrase`，PBKDF2 派生密钥，全表透明加解密（混淆级，生产建议叠加文件系统加密）
+- ✅ P1 墓碑 `forget <id>`：内容清空、留 digest、审计可查「为什么忘了」；P0 `forget <id> --hard --yes` 物理删除需显式审批
+- ✅ `GET /stats` + `POST /forget` sidecar 端点；`--read-only` 启动参数
+- ✅ GitHub Actions CI：Python 3.11/3.12 矩阵 + 安装 + 全量单测 + CLI 冒烟
+- ✅ `pyproject.toml` / `__init__.py` 版本升到 0.5.0，导出全部新 API
+
+### 验证
+- ✅ 68 项单测全绿（新增 38 项覆盖 v0.2–v0.5 每个特性，含加密磁盘密文断言、HNSW 召回、主动开口决策矩阵、CLI 回滚/遗忘/联想）
+- ✅ QQ 记忆库数据库（`海豚-3311` 等暗号）在新代码下完整可读，字段缺省全部兼容
+- ✅ 提交 `c1923c9`（v0.2.0）→ `bde8e4a`（v0.4.0）等已推 GitHub master（v0.5.0 推送见下）
+
+---
+
 ## 2026-11-01 — QQ 通道接通并验证 ✅
 
 AstrBot 之上接 QQ 个人号（NapCat + OneBot v11 反向 WS），记忆库与适配器**零改动**。
