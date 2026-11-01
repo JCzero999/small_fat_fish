@@ -309,6 +309,8 @@ class SemanticMemory:
     valid_from: str | None = None      # 生效开始时间（ISO8601），None 表示创建时立即生效
     valid_to: str | None = None        # 生效结束时间（ISO8601），None 表示持续有效
     supersedes: str | None = None      # 被取代的记忆 ID，形成版本链
+    # --- 六档保留度（v0.2.2） ---
+    retention_tier: int = 0            # 0=热/P5, 1=温/P4, 2=冷/P3, 3=归档/P2, 4=墓碑/P1
 
     def __post_init__(self) -> None:
         self.id = _string(self.id, "semantic.id")
@@ -345,6 +347,7 @@ class SemanticMemory:
             self.valid_to = _datetime_field(self.valid_to, "semantic.valid_to")
         if self.supersedes is not None:
             self.supersedes = _string(self.supersedes, "semantic.supersedes")
+        self.retention_tier = _integer(self.retention_tier, "semantic.retention_tier")
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SemanticMemory:
@@ -374,6 +377,7 @@ class SemanticMemory:
             valid_from=data.get("valid_from"),
             valid_to=data.get("valid_to"),
             supersedes=data.get("supersedes"),
+            retention_tier=data.get("retention_tier", 0),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -399,6 +403,7 @@ class SemanticMemory:
             "valid_from": self.valid_from,
             "valid_to": self.valid_to,
             "supersedes": self.supersedes,
+            "retention_tier": self.retention_tier,
         }
 
     def embedding_text(self) -> str:
@@ -427,6 +432,8 @@ class EpisodicMemory:
     supersedes: str | None = None
     # --- 情感事件五态状态机（v0.2.0） ---
     emotion_state: str | None = None  # open | acknowledged | attended | resolved | dormant
+    # --- 六档保留度（v0.2.2） ---
+    retention_tier: int = 0            # 0=热/P5, 1=温/P4, 2=冷/P3, 3=归档/P2, 4=墓碑/P1
 
     def __post_init__(self) -> None:
         self.id = _string(self.id, "episodic.id")
@@ -461,6 +468,7 @@ class EpisodicMemory:
                 "episodic.emotion_state",
                 ("open", "acknowledged", "attended", "resolved", "dormant"),
             )
+        self.retention_tier = _integer(self.retention_tier, "episodic.retention_tier")
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> EpisodicMemory:
@@ -494,6 +502,7 @@ class EpisodicMemory:
             valid_to=data.get("valid_to"),
             supersedes=data.get("supersedes"),
             emotion_state=data.get("emotion_state"),
+            retention_tier=data.get("retention_tier", 0),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -516,6 +525,7 @@ class EpisodicMemory:
             "valid_to": self.valid_to,
             "supersedes": self.supersedes,
             "emotion_state": self.emotion_state,
+            "retention_tier": self.retention_tier,
         }
 
     def embedding_text(self) -> str:

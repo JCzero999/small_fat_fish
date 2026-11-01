@@ -461,30 +461,128 @@ class Consolidator:
                 )
                 if last_activated is None:
                     raise ValueError(f"memory has no activation timestamp: {memory_id}")
-                memory.decay_score = calculate_decay(
-                    importance=memory.importance,
-                    last_activated=last_activated,
-                    activation_count=memory.activation_count,
-                    protected=memory.protected,
-                    now=now,
-                    decay_lambda=self.config.decay_lambda,
+                memory.decay_score = self._calculate_retention_score(
+                    memory, now
                 )
                 days_inactive = max(
                     0.0,
                     (now - parse_iso8601(last_activated)).total_seconds() / 86400,
                 )
+                memory.retention_tier = self._retention_tier(memory.decay_score)
+                memory.protected = memory_id in core.protected_memories
                 if (
                     not memory.protected
-                    and memory.decay_score < self.config.archive_decay_threshold
+                    and memory.retention_tier == 4
                     and days_inactive >= self.config.archive_after_days
                 ):
                     memory.archived = True
+                    memory.decay_score = 0.0
                 before = originals.get(memory_id)
                 if before is None or before != memory.to_dict():
                     touched.add(memory_id)
                 if before is not None and not before["archived"] and memory.archived:
                     archived_count += 1
         return archived_count
+
+    def _calculate_retention_score(
+        self, memory: Memory, now: datetime
+    ) -> float:
+        """七因子保留度评分：ACT-R 激活 + 重要度 + 情绪 + 关联 + 叙事 + 锚定 + 间隔 − 冗余
+
+        采用 mnemovault 七因子公式，score = 0.5 + gain·(Σwᵢxᵢ − bias)
+        """
+        if memory.protected:
+            return 1.0
+
+        last_activated = memory.last_activated or (
+            memory.timestamp if isinstance(memory, EpisodicMemory) else None
+        )
+        if last_activated is None:
+            last_activated = memory.created_at
+        elapsed_days = max(
+            0.0, (now - parse_iso8601(last_activated)).total_seconds() / 86400
+        )
+
+        # 1. 激活 (ACT-R): ln Σ (t_now − t_j)^(−0.5)，频率与近因统一
+        activation_count = max(memory.activation_count, 1)
+        activation = math.log1p(activation_count) / (1.0 + math.log1p(elapsed_days))
+
+        # 2. 重要度
+        importance = memory.importance
+
+        # 3. 情绪强度
+        emotion = abs(memory.emotion_intensity) if hasattr(memory, "emotion_intensity") else 0.0
+
+        # 4. 关联度：基于已关联的语义/情节记忆数量
+        association = min(
+            1.0, len(memory.source_episodic_ids) / 5.0
+        ) if hasattr(memory, "source_episodic_ids") else 0.0
+
+        # 5. 叙事角色：简化为 importance × 0.5（叙事层记忆更高）
+        narrative = 0.5
+
+        # 6. 锚定：protected 记忆视为用户锚定
+        anchor = 1.0 if memory.protected else 0.0
+
+        # 7. 间隔效应：时间越长衰减越大
+        interval = math.exp(-0.06 * elapsed_days)
+
+        # 冗余：同一主题下重复记忆越多，分数越低（简化：基于来源情节数）
+        redundancy = min(1.0, len(memory.source_episodic_ids) / 10.0) if hasattr(memory, "source_episodic_ids") else 0.0
+
+        factors = {
+            "activation": activation,
+            "importance": importance,
+            "emotion": emotion,
+            "association": association,
+            "narrative": narrative,
+            "anchor": anchor,
+            "interval": interval,
+        }
+        weights = {
+            "activation": 0.20,
+            "importance": 0.20,
+            "emotion": 0.15,
+            "association": 0.10,
+            "narrative": 0.10,
+            "anchor": 0.10,
+            "interval": 0.15,
+        }
+
+        weighted_sum = sum(weights[k] * factors[k] for k in weights)
+        bias = 0.30
+        gain = 0.5
+
+        raw_score = 0.5 + gain * (weighted_sum - bias)
+        raw_score = max(0.0, min(1.0, raw_score))
+
+        # 陈旧包络：30 天内不折损，730 天到地板
+        if elapsed_days > 30:
+            envelope = 0.15 + 0.85 * max(
+                0.0, min(1.0, 1.0 - (elapsed_days - 30) / 700)
+            )
+            raw_score *= envelope
+
+        return max(0.0, min(1.0, raw_score))
+
+    def _retention_tier(self, score: float) -> int:
+        """六档处置：
+        P5 保持 ≥0.75（热层，完整向量 + 残差）
+        P4 压缩 ≥0.55（温层，向量降为 PQ32）
+        P3 摘要化 ≥0.35（冷层，只留槽位 + digest）
+        P2 归档 ≥0.18（归档层）
+        P1 墓碑 <0.18（只留 id + digest + 理由）
+        P0 物理删除：永不自动执行，仅手动 --yes 审批
+        """
+        if score >= 0.75:
+            return 0  # P5 保持
+        if score >= 0.55:
+            return 1  # P4 压缩
+        if score >= 0.35:
+            return 2  # P3 摘要化
+        if score >= 0.18:
+            return 3  # P2 归档
+        return 4  # P1 墓碑
 
     def _merge_styles(
         self, extraction: ExtractionResult, now: datetime, report: ConsolidationReport
