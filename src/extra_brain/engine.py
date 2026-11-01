@@ -29,8 +29,10 @@ class ExtraBrain:
         extractor: MemoryExtractor | None = None,
         embedder: EmbeddingProvider | None = None,
         config: MemoryConfig | None = None,
+        read_only: bool = False,
     ) -> None:
         self.config = config or MemoryConfig()
+        self.read_only = bool(read_only)
         self.embedder = embedder or LocalHashingEmbedder(self.config.embedding_dimensions)
         self.store = MemoryStore(db_path, core_token_limit=self.config.core_token_limit)
         self.indexer = MemoryIndexer(self.embedder)
@@ -63,6 +65,10 @@ class ExtraBrain:
     def save_core(self, core: CoreMemory) -> None:
         self.store.save_core(core)
 
+    def storage_stats(self) -> dict[str, Any]:
+        """返回数据库分层统计（保留度档位、归档比例等）。"""
+        return self.store.storage_stats()
+
     def consolidate(
         self,
         conversation: str | Sequence[ConversationMessage | Mapping[str, str]],
@@ -70,6 +76,8 @@ class ExtraBrain:
         session_id: str | None = None,
         now: datetime | None = None,
     ) -> ConsolidationReport:
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode; consolidation is not allowed")
         if self._consolidator is None:
             raise ExtractionError(
                 "no extractor configured; provide MemoryExtractor or use ExtraBrain.from_env()"
@@ -86,7 +94,17 @@ class ExtraBrain:
         entities: Sequence[str] = (),
         now: datetime | None = None,
         as_of: str | None = None,
+        path: str | None = None,
     ) -> RetrievalResult:
+        if path is not None:
+            return self.retriever.search_four_paths(
+                query,
+                recent_context=recent_context,
+                entities=entities,
+                now=now,
+                path=path,
+                as_of=as_of,
+            )
         return self.retriever.search(
             query,
             recent_context=recent_context,

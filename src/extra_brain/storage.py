@@ -462,6 +462,69 @@ class MemoryStore:
             for row in rows
         ]
 
+    def storage_stats(self) -> dict[str, Any]:
+        """返回数据库分层统计：各类型记忆数量、保留度档位分布、归档比例等。"""
+        with self._lock:
+            semantic_total = self._connection.execute(
+                "SELECT COUNT(*) FROM semantic_memories"
+            ).fetchone()[0]
+            semantic_archived = self._connection.execute(
+                "SELECT COUNT(*) FROM semantic_memories WHERE archived = 1"
+            ).fetchone()[0]
+            episodic_total = self._connection.execute(
+                "SELECT COUNT(*) FROM episodic_memories"
+            ).fetchone()[0]
+            episodic_archived = self._connection.execute(
+                "SELECT COUNT(*) FROM episodic_memories WHERE archived = 1"
+            ).fetchone()[0]
+            style_total = self._connection.execute(
+                "SELECT COUNT(*) FROM style_memories"
+            ).fetchone()[0]
+            vector_count = self._connection.execute(
+                "SELECT COUNT(*) FROM memory_vectors"
+            ).fetchone()[0]
+
+        # 分层统计（基于 retention_tier，从内存中读取更准确）
+        semantic_tiers: dict[int, int] = {}
+        for memory in self.list_semantic(include_archived=True):
+            semantic_tiers[memory.retention_tier] = (
+                semantic_tiers.get(memory.retention_tier, 0) + 1
+            )
+        episodic_tiers: dict[int, int] = {}
+        for memory in self.list_episodic(include_archived=True):
+            episodic_tiers[memory.retention_tier] = (
+                episodic_tiers.get(memory.retention_tier, 0) + 1
+            )
+
+        total_memories = semantic_total + episodic_total + style_total
+        total_archived = semantic_archived + episodic_archived
+        db_size_bytes = 0
+        try:
+            db_size_bytes = Path(self.path).stat().st_size
+        except OSError:
+            pass
+
+        return {
+            "total_memories": total_memories,
+            "total_archived": total_archived,
+            "archive_ratio": round(total_archived / max(total_memories, 1), 4),
+            "semantic": {
+                "total": semantic_total,
+                "archived": semantic_archived,
+                "archive_ratio": round(semantic_archived / max(semantic_total, 1), 4),
+                "tiers": {str(k): v for k, v in sorted(semantic_tiers.items())},
+            },
+            "episodic": {
+                "total": episodic_total,
+                "archived": episodic_archived,
+                "archive_ratio": round(episodic_archived / max(episodic_total, 1), 4),
+                "tiers": {str(k): v for k, v in sorted(episodic_tiers.items())},
+            },
+            "style": {"total": style_total},
+            "vectors": {"total": vector_count},
+            "db_size_bytes": db_size_bytes,
+        }
+
 
 def _to_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)

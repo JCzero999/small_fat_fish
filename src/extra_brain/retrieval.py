@@ -47,6 +47,7 @@ class ScoredMemory:
 class RetrievalResult:
     semantic: list[ScoredMemory] = field(default_factory=list)
     episodic: list[ScoredMemory] = field(default_factory=list)
+    path: str = "standard"  # retrieval path label
 
     @property
     def memory_ids(self) -> list[str]:
@@ -56,6 +57,7 @@ class RetrievalResult:
         return {
             "semantic": [item.to_dict() for item in self.semantic],
             "episodic": [item.to_dict() for item in self.episodic],
+            "path": self.path,
         }
 
 
@@ -175,6 +177,221 @@ class MemoryRetriever:
             text = memory.embedding_text().casefold()
             return any(entity in text for entity in entities)
         return True
+
+    def search_four_paths(
+        self,
+        query: str,
+        *,
+        recent_context: Sequence[str] = (),
+        entities: Iterable[str] = (),
+        now: datetime | None = None,
+        path: str | None = None,
+        as_of: str | None = None,
+    ) -> RetrievalResult:
+        """四路召回（v0.3.0）：
+
+        1) Path A - 语义相似：对 query 与语义/情节向量做余弦相似度，取 top-k。
+        2) Path B - 关键词实体：对 query 提取实体/关键词，硬过滤相关记忆。
+        3) Path C - 情绪共鸣：query 情绪标签与记忆情绪匹配，得分更高。
+        4) Path D - 时间点快照：使用 as_of 查询某个时间点的记忆状态（双时态）。
+
+        当 ``path`` 为 None 时，自动混合所有路径的得分；否则仅使用指定路径。
+        """
+        now = now or utc_now()
+        if now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+
+        # Path A: 语义检索（标准检索）
+        standard = self.search(
+            query,
+            recent_context=recent_context,
+            entities=entities,
+            now=now,
+            as_of=as_of,
+        )
+        if path == "A":
+            standard.path = "A"
+            return standard
+
+        # Path B: 关键词/实体硬过滤检索（只使用实体，不看语义相似度）
+        entities_only = self._entity_search(
+            query,
+            recent_context=recent_context,
+            entities=entities,
+            now=now,
+            as_of=as_of,
+        )
+        if path == "B":
+            entities_only.path = "B"
+            return entities_only
+
+        # Path C: 情绪共鸣检索（以情绪匹配为主导）
+        emotion_first = self._emotion_search(
+            query,
+            recent_context=recent_context,
+            entities=entities,
+            now=now,
+            as_of=as_of,
+        )
+        if path == "C":
+            emotion_first.path = "C"
+            return emotion_first
+
+        # Path D: 时间点快照（as_of 翻车，返回空结果表示该时间点无数据）
+        snapshot = self._snapshot_search(query, now=now, as_of=as_of)
+        if path == "D":
+            snapshot.path = "D"
+            return snapshot
+
+        # 默认：四路融合，按 final_score 合并去重
+        merged: dict[str, ScoredMemory] = {}
+        for item in (*standard.semantic, *standard.episodic):
+            merged[item.memory.id] = item
+        for item in (*entities_only.semantic, *entities_only.episodic):
+            if item.memory.id not in merged or item.final_score > merged[item.memory.id].final_score:
+                merged[item.memory.id] = item
+        for item in (*emotion_first.semantic, *emotion_first.episodic):
+            if item.memory.id not in merged or item.final_score > merged[item.memory.id].final_score:
+                merged[item.memory.id] = item
+        for item in (*snapshot.semantic, *snapshot.episodic):
+            if item.memory.id not in merged or item.final_score > merged[item.memory.id].final_score:
+                merged[item.memory.id] = item
+
+        semantic = sorted(
+            [item for item in merged.values() if isinstance(item.memory, SemanticMemory)],
+            key=lambda item: item.final_score,
+            reverse=True,
+        )[: self.config.semantic_top_k]
+        episodic = sorted(
+            [item for item in merged.values() if isinstance(item.memory, EpisodicMemory)],
+            key=lambda item: item.final_score,
+            reverse=True,
+        )[: self.config.episodic_top_k]
+
+        result = RetrievalResult(semantic=semantic, episodic=episodic)
+        result.path = "ABCD"
+        return result
+
+    def _entity_search(
+        self,
+        query: str,
+        *,
+        recent_context: Sequence[str] = (),
+        entities: Iterable[str] = (),
+        now: datetime | None = None,
+        as_of: str | None = None,
+    ) -> RetrievalResult:
+        """Path B：只使用实体关键词硬过滤，不计算语义相似度分数（similarity 设为 0）。"""
+        if not entities:
+            return RetrievalResult(path="B")
+        result = self.search(
+            query,
+            recent_context=recent_context,
+            entities=list(entities),
+            now=now,
+            as_of=as_of,
+        )
+        # 重新计算分数：只保留 importance + recency + emotion，similarity=0
+        result.semantic = [
+            ScoredMemory(
+                memory=item.memory,
+                semantic_similarity=0.0,
+                importance=item.importance,
+                recency_boost=item.recency_boost,
+                emotion_match=item.emotion_match,
+                final_score=0.25 * item.importance
+                + 0.20 * item.recency_boost
+                + 0.15 * item.emotion_match,
+            )
+            for item in result.semantic
+        ]
+        result.episodic = [
+            ScoredMemory(
+                memory=item.memory,
+                semantic_similarity=0.0,
+                importance=item.importance,
+                recency_boost=item.recency_boost,
+                emotion_match=item.emotion_match,
+                final_score=0.25 * item.importance
+                + 0.20 * item.recency_boost
+                + 0.15 * item.emotion_match,
+            )
+            for item in result.episodic
+        ]
+        result.path = "B"
+        return result
+
+    def _emotion_search(
+        self,
+        query: str,
+        *,
+        recent_context: Sequence[str] = (),
+        entities: Iterable[str] = (),
+        now: datetime | None = None,
+        as_of: str | None = None,
+    ) -> RetrievalResult:
+        """Path C：以情绪共鸣为主导，语义相似度权重降低，情绪匹配权重提高。"""
+        result = self.search(
+            query,
+            recent_context=recent_context,
+            entities=list(entities),
+            now=now,
+            as_of=as_of,
+        )
+        query_emotion = detect_emotion("\n".join([*recent_context, query]))
+        result.semantic = [
+            ScoredMemory(
+                memory=item.memory,
+                semantic_similarity=item.semantic_similarity,
+                importance=item.importance,
+                recency_boost=item.recency_boost,
+                emotion_match=item.emotion_match,
+                final_score=(
+                    0.30 * item.semantic_similarity
+                    + 0.25 * item.importance
+                    + 0.20 * item.recency_boost
+                    + 0.25 * item.emotion_match
+                ),
+            )
+            for item in result.semantic
+            if query_emotion is None or item.emotion_match > 0.3
+        ]
+        result.episodic = [
+            ScoredMemory(
+                memory=item.memory,
+                semantic_similarity=item.semantic_similarity,
+                importance=item.importance,
+                recency_boost=item.recency_boost,
+                emotion_match=item.emotion_match,
+                final_score=(
+                    0.30 * item.semantic_similarity
+                    + 0.25 * item.importance
+                    + 0.20 * item.recency_boost
+                    + 0.25 * item.emotion_match
+                ),
+            )
+            for item in result.episodic
+            if query_emotion is None or item.emotion_match > 0.3
+        ]
+        result.path = "C"
+        return result
+
+    def _snapshot_search(
+        self,
+        query: str,
+        *,
+        now: datetime | None = None,
+        as_of: str | None = None,
+    ) -> RetrievalResult:
+        """Path D：返回 as_of 时间点生效的记忆状态，不参与检索排序，仅作时间快照。"""
+        if as_of is None:
+            return RetrievalResult(path="D")
+        # as_of 检索会通过 _eligible 过滤掉未生效或已过期的记忆
+        return self.search(
+            query,
+            now=now,
+            as_of=as_of,
+        )
 
     def _rank_type(
         self,
