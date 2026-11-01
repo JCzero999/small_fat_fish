@@ -85,6 +85,8 @@ def semantic(
     timestamp: datetime | None = None,
     importance: float = 0.7,
     protected: bool = False,
+    valence: str = "positive",
+    intensity: float = 0.7,
 ) -> SemanticMemory:
     moment = to_iso8601(timestamp or NOW)
     return SemanticMemory(
@@ -95,8 +97,8 @@ def semantic(
         object="白茶",
         detail="用户说喝白茶会让用户安心。",
         importance=importance,
-        emotion_valence="positive",
-        emotion_intensity=0.7,
+        emotion_valence=valence,
+        emotion_intensity=intensity,
         confidence=0.9,
         source_episodic_ids=[],
         created_at=moment,
@@ -446,7 +448,8 @@ class ConsolidationTests(BrainTestCase):
         old_time = NOW - timedelta(days=1000)
         with self.brain(ExtractionResult()) as brain:
             brain.store.save_semantic(
-                semantic("sem_stale", timestamp=old_time, importance=0.3)
+                semantic("sem_stale", timestamp=old_time, importance=0.3,
+                         valence="neutral", intensity=0.0)
             )
             brain.store.save_semantic(
                 semantic("sem_protected", timestamp=old_time, importance=0.3, protected=True)

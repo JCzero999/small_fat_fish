@@ -41,6 +41,7 @@ from .models import (
     StyleMemory,
     UserSchema,
     UserStableProfile,
+    is_emotion_protected,
     is_unresolved_episode,
 )
 from .retrieval import Injection, MemoryRetriever, RetrievalResult, ScoredMemory

@@ -35,6 +35,7 @@ from extra_brain.models import (  # noqa: E402
     RelationshipModel,
     SemanticMemory,
     UserSchema,
+    is_emotion_protected,
     new_memory_id,
     to_iso8601,
     utc_now,
@@ -571,6 +572,58 @@ class CompanionLayerTests(TempDbTestCase):
             brain.save_proactive_config(config)
             loaded = brain.get_proactive_config_by_user("u1")
             self.assertEqual(loaded.last_umo, "aiocqhttp:FriendMessage:123456")
+
+
+class EmotionProtectionTests(TempDbTestCase):
+    """v0.4.0 规划项：情感记忆保护（flags.bit6 语义）——慢衰减 + 保底温层。"""
+
+    def test_predicate(self) -> None:
+        hot = make_semantic("sem_hot", emotion_valence="negative", emotion_intensity=0.7)
+        self.assertTrue(is_emotion_protected(hot))
+        mild = make_semantic("sem_mild", emotion_valence="neutral", emotion_intensity=0.5)
+        self.assertFalse(is_emotion_protected(mild))
+        valenced = make_semantic("sem_val", emotion_valence="positive", emotion_intensity=0.5)
+        self.assertTrue(is_emotion_protected(valenced))
+        episodic_strong = make_episodic("ep_strong", emotions=["感动"], importance=0.9)
+        self.assertTrue(is_emotion_protected(episodic_strong))
+        episodic_mild = make_episodic("ep_mild", emotions=["平静"], importance=0.6)
+        self.assertFalse(is_emotion_protected(episodic_mild))
+
+    def test_stale_emotional_memory_floors_at_warm_tier(self) -> None:
+        """高情绪显著性但很久没激活：曲线放慢 3 倍 + tier 封顶温层，不落入归档/墓碑。"""
+        from extra_brain import ExtractionResult
+
+        very_old = NOW - timedelta(days=730)  # 陈旧包络到地板：普通记忆此时必入墓碑档
+        with ExtraBrain(self.db_path, extractor=FakeExtractor(ExtractionResult())) as brain:
+            # 对照：普通低价值陈旧记忆会被归档
+            brain.store.save_semantic(
+                make_semantic(
+                    "sem_plain_stale",
+                    importance=0.3,
+                    emotion_valence="neutral",
+                    emotion_intensity=0.0,
+                    last_activated=to_iso8601(very_old),
+                )
+            )
+            # 情感保护：高唤起陈旧记忆保底温层、不归档
+            brain.store.save_semantic(
+                make_semantic(
+                    "sem_emotional_stale",
+                    importance=0.5,
+                    emotion_valence="negative",
+                    emotion_intensity=0.8,
+                    last_activated=to_iso8601(very_old),
+                )
+            )
+            brain._consolidator.consolidate("用户：随便聊聊。", now=NOW)
+
+            plain = brain.store.get_semantic("sem_plain_stale")
+            emotional = brain.store.get_semantic("sem_emotional_stale")
+            self.assertTrue(plain.archived)
+            self.assertFalse(emotional.archived)
+            self.assertLessEqual(emotional.retention_tier, 1)  # 热或温
+            if not plain.archived:  # 归档会把分数清零，仅未归档时比较
+                self.assertGreater(emotional.decay_score, plain.decay_score)
 
 
 class EncryptionTests(TempDbTestCase):

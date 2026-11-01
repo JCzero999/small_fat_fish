@@ -23,6 +23,7 @@ from .models import (
     EpisodicMemory,
     SemanticMemory,
     StyleMemory,
+    is_emotion_protected,
     is_unresolved_episode,
     new_memory_id,
     parse_iso8601,
@@ -512,6 +513,10 @@ class Consolidator:
                     (now - parse_iso8601(last_activated)).total_seconds() / 86400,
                 )
                 memory.retention_tier = self._retention_tier(memory.decay_score)
+                # 情感保护闸（v0.4.0 flags.bit6 语义）：闸只封顶 tier 不改分数，
+                # 最高降到温层（P4，tier 1），不会进冷/归档/墓碑。
+                if not unresolved and is_emotion_protected(memory) and memory.retention_tier > 1:
+                    memory.retention_tier = 1
                 memory.protected = memory_id in core.protected_memories
                 if (
                     not memory.protected
@@ -568,8 +573,9 @@ class Consolidator:
         # 6. 锚定：protected 记忆视为用户锚定
         anchor = 1.0 if memory.protected else 0.0
 
-        # 7. 间隔效应：时间越长衰减越大
-        interval = math.exp(-0.06 * elapsed_days)
+        # 7. 间隔效应：时间越长衰减越大（情感保护记忆曲线放慢 3 倍）
+        interval_rate = 0.02 if is_emotion_protected(memory) else 0.06
+        interval = math.exp(-interval_rate * elapsed_days)
 
         # 冗余：同一主题下重复记忆越多，分数越低（简化：基于来源情节数）
         redundancy = min(1.0, len(memory.source_episodic_ids) / 10.0) if hasattr(memory, "source_episodic_ids") else 0.0

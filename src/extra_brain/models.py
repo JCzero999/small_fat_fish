@@ -587,6 +587,28 @@ def is_unresolved_episode(memory: Memory) -> bool:
     )
 
 
+def is_emotion_protected(memory: Memory) -> bool:
+    """情感记忆保护（v0.4.0 规划项，对应 mnemovault flags.bit6）。
+
+    高情绪显著性的记忆在保留度计算中遗忘曲线放慢 3 倍、保底温层（P4），
+    不会被淡忘到冷/归档/墓碑——用户对助手留下强烈感受的事，助手不该忘。
+
+    判定（以本库可用的情绪字段映射 PAD 阈值）：
+    - 语义记忆：emotion_intensity ≥ 0.65（≈唤起阈值），或
+      效价非 neutral 且 emotion_intensity ≥ 0.45（≈|valence|×强度显著）
+    - 情节记忆：带情绪标签且 importance ≥ 0.75（本库无逐事件强度字段）
+    """
+    intensity = getattr(memory, "emotion_intensity", None)
+    if isinstance(intensity, (int, float)):
+        valence = getattr(memory, "emotion_valence", "neutral")
+        return intensity >= 0.65 or (
+            valence in ("positive", "negative", "mixed") and intensity >= 0.45
+        )
+    if isinstance(memory, EpisodicMemory):
+        return bool(memory.emotions) and memory.importance >= 0.75
+    return False
+
+
 @dataclass(slots=True)
 class RelationshipModel:
     """v0.4.0 关系模型（kind=5）：持久化的人际关系状态，重启后恢复。
