@@ -1,14 +1,17 @@
-# extra_brain 挂载规范（Mount Spec）v1
+# extra_brain 挂载规范（Mount Spec）v1.1
 
 > 本文档定义把 extra_brain 记忆库挂载到任意聊天宿主（AstrBot / DSH / 未来自研平台）的**通用契约**。
 > 核心原则：记忆库是产品，宿主是可替换的挂载点。换宿主 = 写一个新适配器（约 150 行），**永不返工记忆库**。
+> v1.1（2026-11-01）：适配 extra_brain v0.5.0。四项契约不变（向后兼容），新增可选契约见 §2.5。
 
 ## 1. 两个挂载面（都是一等公民）
 
 | 挂载面 | 适用宿主 | 接入方式 | 现状 |
 |---|---|---|---|
 | **Python API** | Python 宿主（AstrBot、MaiBot、自研 Python 平台） | `from extra_brain import ExtraBrain` 进程内直连 | ✅ `astrbot_plugin_extra_brain`（local 后端） |
-| **HTTP 协议** | 任意语言宿主（Node/Go/自研非 Python 平台） | `extra_brain.server` sidecar：`POST /inject` `POST /consolidate` `GET /health /core /list` | ✅ `dsh-plugin-extra-brain`（JS 桥）已用；`astrbot_plugin_extra_brain`（http 后端）亦支持 |
+| **HTTP 协议** | 任意语言宿主（Node/Go/自研非 Python 平台） | `extra_brain.server` sidecar：`POST /inject` `/consolidate` `/forget`，`GET /health /core /list /stats` | ✅ `dsh-plugin-extra-brain`（JS 桥）已用；`astrbot_plugin_extra_brain`（http 后端）亦支持 |
+
+sidecar 启动可选参数（v0.3.0+）：`--read-only`（拒绝一切写入，适合面板/doctor 挂载）、`--encryption-passphrase`（静态加密，也可用环境变量 `EXTRA_BRAIN_ENCRYPTION_PASSPHRASE`）。
 
 ## 2. 挂载契约（四件事）
 
@@ -42,10 +45,19 @@
 - 巩固失败 → 消息放回缓冲，下轮重试
 - 无 API Key → 只读模式（注入可用，巩固 503/报错）
 
+### 2.5 可选契约（v0.4.0+，按需接）
+
+| 契约 | 接口 | 宿主责任 |
+|---|---|---|
+| **只读挂载** | `ExtraBrain(read_only=True)` / sidecar `--read-only` | 面板/诊断/解释器一律用只读，读取不改变激活计数 |
+| **主动开口** | `should_proactive_open(peer_id)` → `(bool, reason)`；`record_proactive_open(peer_id)` | 宿主定时器（cron）轮询；返回 `True` 时用 `reason`+检索记忆当**由头**让模型生成开场白，禁止直接吐台词；记录一次开口 |
+| **遗忘审批** | `forget(id)`（P1 墓碑，默认可自动）/ `forget(id, hard=True, approved=True)`（P0 物理删除） | 适配器**永不**自动传 `approved=True`；P0 必须由用户显式指令触发 |
+| **存储观测** | `storage_stats()` / `GET /stats` | 可选展示保留度档位分布、归档比例（`/memory status` 平替） |
+
 ## 3. 适配器的「薄」标准
 
 - 只做钩子 → 契约的翻译；**禁止出现记忆库领域词汇**（importance/decay/embedding/conflict…那些属于 extra_brain 核心的词汇）
-- 领域操作全部通过后端接口：`inject / consolidate / core / list / search`
+- 领域操作全部通过后端接口：`inject / consolidate / core / list / search / stats / forget`
 - 现成参照：`astrbot-plugin-extra-brain/main.py`（≈400 行含注释与指令）、`dsh-plugin-extra-brain/index.js`（≈150 行）
 
 ## 4. 数据即资产
@@ -53,6 +65,8 @@
 - 换宿主 = 拷贝 `<data_dir>/` 下的 `.db` 文件（每库自包含：记忆+向量+审计）
 - schema 变更需提供迁移故事；`operation_log` 的 before/after 快照可支撑人工恢复
 - peer 文件名规则：安全字符化 + md5 短哈希（避免 `:` 等非法字符，跨平台一致）
+- **v0.2–v0.5 新字段向后兼容、旧库零迁移**（新字段全部可选、缺省安全，建表 `IF NOT EXISTS`）
+- ⚠️ **加密与删除是资产级操作**：首次给已有库开加密、或执行 P0 物理删除前，必须先备份 `.db`（连同 `.db-wal` / `.db-shm` 边车文件）。P1 墓碑保留 digest 与审计，是唯一可自动执行的降档
 
 ## 5. 新宿主接入清单（约 1 小时）
 

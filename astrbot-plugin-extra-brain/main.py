@@ -30,6 +30,13 @@ from astrbot.api import logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import LLMResponse, ProviderRequest
 
+# GreedyStr：把指令后剩余的全部文本收进一个参数（多词 search / 带 flag 的 forget 需要）。
+# 从 core 路径导入（AstrBot 官方内置指令同样用法）；万一版本变动则回退为普通 str。
+try:
+    from astrbot.core.star.filter.command import GreedyStr
+except Exception:  # pragma: no cover - 版本兼容兜底
+    GreedyStr = str
+
 _INJECT_FLAG = "extra_brain_injected"
 
 # unified_msg_origin 形如 "<platform>:<MessageType>:<session_id>"，其中 webchat 的
@@ -171,6 +178,13 @@ class LocalBackend:
     def search(self, peer_id: str, query: str) -> dict:
         return self._brain(peer_id).retrieve(query).to_dict()
 
+    def stats(self, peer_id: str) -> dict:
+        """存储分层统计（返回库侧原样 payload，适配器不做领域判断）。"""
+        return self._brain(peer_id).storage_stats()
+
+    def forget(self, peer_id: str, memory_id: str, *, hard: bool, approved: bool) -> dict:
+        return self._brain(peer_id).forget(memory_id, hard=hard, approved=approved)
+
     def close(self) -> None:
         for brain in self._brains.values():
             try:
@@ -230,6 +244,15 @@ class HttpBackend:
     def search(self, peer_id: str, query: str) -> dict:
         # sidecar 未提供独立 search 端点；local 后端可用
         raise NotImplementedError("http 后端暂不支持 search，请使用 local 后端")
+
+    def stats(self, peer_id: str) -> dict:
+        return self._get(f"/stats?peer_id={urllib.request.quote(peer_id)}")
+
+    def forget(self, peer_id: str, memory_id: str, *, hard: bool, approved: bool) -> dict:
+        return self._post(
+            "/forget",
+            {"peer_id": peer_id, "memory_id": memory_id, "hard": hard, "approved": approved},
+        )
 
     def close(self) -> None:
         return None
@@ -472,7 +495,7 @@ class ExtraBrainPlugin(star.Star):
         yield event.plain_result("\n".join(lines))
 
     @memory_group.command("search")
-    async def memory_search(self, event: AstrMessageEvent, query: str):
+    async def memory_search(self, event: AstrMessageEvent, query: GreedyStr):
         """检索记忆（本地后端）"""
         backend = self._backend_or_none()
         if backend is None:
@@ -498,6 +521,81 @@ class ExtraBrainPlugin(star.Star):
             memory = item.get("memory", {})
             lines.append(f"[{memory.get('id')}] {memory.get('summary')}")
         yield event.plain_result("\n".join(lines) or "（没有相关记忆）")
+
+    @memory_group.command("stats")
+    async def memory_stats(self, event: AstrMessageEvent):
+        """查看记忆库分层统计（数量/保留度档位/归档比例）"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        try:
+            stats = await asyncio.to_thread(backend.stats, self._peer_of(event))
+        except Exception as exc:
+            yield event.plain_result(f"读取失败：{exc}")
+            return
+        tier_names = ["热(P5)", "温(P4)", "冷(P3)", "归档(P2)", "墓碑(P1)"]
+        def tier_line(counts: dict) -> str:
+            if not counts:
+                return "（空）"
+            return "  ".join(
+                f"{tier_names[int(k)] if k.isdigit() and 0 <= int(k) < 5 else '档' + k}x{v}"
+                for k, v in counts.items()
+            )
+        semantic = stats.get("semantic", {})
+        episodic = stats.get("episodic", {})
+        yield event.plain_result(
+            "\n".join(
+                [
+                    "记忆库分层统计",
+                    f"总量：{stats.get('total_memories')} 条（归档 {stats.get('total_archived')}，"
+                    f"比例 {round(float(stats.get('archive_ratio', 0)) * 100, 1)}%）",
+                    f"语义：{semantic.get('total')} 条 | {tier_line(semantic.get('tiers', {}))}",
+                    f"情节：{episodic.get('total')} 条 | {tier_line(episodic.get('tiers', {}))}",
+                    f"风格：{stats.get('style', {}).get('total')} 条 | 向量 {stats.get('vectors', {}).get('total')} 个",
+                    f"库体积：{round(int(stats.get('db_size_bytes', 0)) / 1024, 1)} KB",
+                ]
+            )
+        )
+
+    @memory_group.command("forget")
+    async def memory_forget(self, event: AstrMessageEvent, args: GreedyStr):
+        """遗忘一条记忆：/memory forget <id>（默认 P1 墓碑）；<id> --hard --yes 才物理删除"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        tokens = (args or "").split()
+        if not tokens:
+            yield event.plain_result(
+                "用法：/memory forget <记忆ID> [--hard --yes]（默认 P1 墓碑；--hard --yes 物理删除）"
+            )
+            return
+        memory_id, flags = tokens[0], " ".join(tokens[1:])
+        hard = "--hard" in flags
+        approved = "--yes" in flags
+        if hard and not approved:
+            yield event.plain_result(
+                "物理删除（P0）需要双确认：/memory forget <id> --hard --yes"
+            )
+            return
+        try:
+            result = await asyncio.to_thread(
+                backend.forget, self._peer_of(event), memory_id, hard=hard, approved=approved
+            )
+        except PermissionError:
+            yield event.plain_result("物理删除未获审批，已拒绝（适配器不会自动批准）。")
+            return
+        except KeyError:
+            yield event.plain_result(f"记忆不存在：{memory_id}")
+            return
+        except Exception as exc:
+            yield event.plain_result(f"遗忘失败：{exc}")
+            return
+        verb = "物理删除（P0）" if result.get("operation") == "hard_delete" else "墓碑化（P1）"
+        yield event.plain_result(
+            f"已{verb}：{memory_id}\n留档摘要：{result.get('digest', '')[:60]}"
+        )
 
     # -- lifecycle --------------------------------------------------------
 

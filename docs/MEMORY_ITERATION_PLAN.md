@@ -2,8 +2,19 @@
 
 > 记忆库从 extra_brain v0.1.0 向生产级可迁移记忆系统演进的架构路线图。  
 > 参考项目：[Rain13Sad/bcf-mnemovault](https://github.com/Rain13Sad/bcf-mnemovault)（DSH 长期记忆与情感插件包族）。  
-> 文档版本：v1.0（首版）  
+> 文档版本：v1.2（2026-11-01 更新：v0.2.0–v0.5.0 **全部落地并推送 GitHub**；情感事件状态机已接通抽取→巩固→检索链路（v0.6.0）。77 项单测全绿 + CI + QQ 真实链路四步回归通过）  
 > 适用范围：src/extra_brain 核心库 + astrbot-plugin-extra-brain 适配器 + dsh-plugin-extra-brain 适配器（搁置中）
+
+> **✅ 落地状态总览**（明细见各版本节与 `CHANGELOG.md`）
+>
+> | 版本 | 状态 | 备注 |
+> |------|------|------|
+> | v0.2.0 双时态/人格锚/情感五态 | ✅ 已落地（`c1923c9`），情感状态机链路已于 **v0.6.0** 接通 | 抽取输出 emotion_state/emotion_updates、巩固迁移校验、反漠视保护全生效（77 测试覆盖） |
+> | v0.2.1 感觉/工作记忆 | ✅ 已落地（`caf2cef`） | sensory_ring / working_set；「下轮优先检索」的启动效应加成 🔜（数据结构已就绪） |
+> | v0.2.2 七因子+六档 | ✅ 已落地（`a7d6597`） | 真实数据分档已验证（高激活 P5、新写入 P4）；闸机机制简化为 protected 恒 P5；P0 在 v0.5.0 |
+> | v0.3.0 四路/只读/统计 | ✅ 已落地（`362ccc7`） | A/B/C/D 四路 + 融合；只读跳过激活写入；storage_stats 含档位分布与 DB 体积 |
+> | v0.4.0 陪伴层 | ✅ 已落地（`bde8e4a`） | 五张新表+CRUD+审计；主动开口四维决策 API；多角度视角 / 情感记忆保护 🔜 |
+> | v0.5.0 生产级 | ✅ 已落地（`7f09816`） | OpenAI 兼容 embedding（降级安全）、纯标准库 HNSW（≥2000 自动切）、静态加密、P1 墓碑/P0 审批、CI 3.11/3.12 |
 
 ---
 
@@ -12,9 +23,9 @@
 extra_brain 是一套给陪伴型 Agent 的跨会话长期记忆系统，核心理念是「少量、高相关、可解释、可遗忘」。已验证端到端链路：
 
 - **AstrBot + WebChatUI**：跨会话暗号验证通过（2026-10-31）
-- **AstrBot + QQ（NapCat + OneBot v11）**：私聊按 QQ 号隔离记忆，跨上下文暗号验证通过（2026-11-01）
-- **单测**：30 项，Python 3.11/3.12 均全绿
-- **核心模块**：models.py / config.py / embeddings.py / extraction.py / storage.py / consolidation.py / retrieval.py / session.py / engine.py / server.py / cli.py
+- **AstrBot + QQ（NapCat + OneBot v11）**：私聊按 QQ 号隔离记忆，跨上下文暗号验证通过（2026-11-01）；**v0.5.0 升级后四步回归通过**（新增暗号写入 + 跨 reset 召回 + 旧记忆零丢失，2026-11-01）
+- **单测**：77 项（含 v0.2–v0.6 新特性与情感状态机集成 45 项），Python 3.11/3.12 均全绿，GitHub Actions CI
+- **核心模块**：models.py / config.py / embeddings.py（含 HNSW）/ extraction.py / storage.py / consolidation.py / retrieval.py / session.py / engine.py / server.py / cli.py
 
 现有架构的边界与局限：
 
@@ -111,7 +122,7 @@ v0.5.0: 真实 embedding + HNSW + 静态加密 + CI 自动化（生产级）
 
 ## 4. 各版本详细规格
 
-### v0.2.0 — 核心数据结构升级（双时态 + 人格锚 + 情感状态机）
+### v0.2.0 — 核心数据结构升级（双时态 + 人格锚 + 情感状态机）✅
 
 **目标**：让记忆具有「时间维度」和「人格稳定性」，解决同一事实随时间反复覆盖、助手人格漂移的问题。
 
@@ -122,14 +133,14 @@ v0.5.0: 真实 embedding + HNSW + 静态加密 + CI 自动化（生产级）
 | **情感事件五态状态机** | Episodic Memory 新增 `emotion_state` 字段（open/acknowledged/attended/resolved/dormant）；未获回应的情绪不衰减，强制进入注入预算，反漠视 |
 
 **验收标准**：
-- 同一事实在不同时间点查询返回不同版本（双时态）
-- `/core --rollback <rev>` 可将人格锚回退到指定版本
-- 情感事件状态机转换符合 open → acknowledged → attended → resolved / dormant
-- 30 项现有单测全绿，新增单测覆盖新增字段
+- ✅ 同一事实在不同时间点查询返回不同版本（双时态）——`as_of` 单测通过
+- ✅ `/core --rollback <rev>` 可将人格锚回退到指定版本——CLI 单测通过
+- ✅ 情感事件状态机转换符合 open → acknowledged → attended → resolved / dormant——字段/校验/持久化 ✅；抽取输出与迁移校验、反漠视规则已于 **v0.6.0** 接通（非法迁移拒绝记警告单测通过）
+- ✅ 现有单测全绿（77/77），新增单测覆盖新增字段
 
 ---
 
-### v0.2.1 — 感觉记忆 + 工作记忆（SessionTracker 增强）
+### v0.2.1 — 感觉记忆 + 工作记忆（SessionTracker 增强）✅
 
 **目标**：减少重复信息的 token 浪费，提升短期上下文相关性。
 
@@ -139,13 +150,13 @@ v0.5.0: 真实 embedding + HNSW + 静态加密 + CI 自动化（生产级）
 | **工作记忆（WorkingSet）** | 上限 16 条，turn 结束释放引用；SessionTracker 新增 `working_set`，本轮刚提及的实体/概念优先检索 |
 
 **验收标准**：
-- 同一轮内重复粘贴的长文本不重复进入语义记忆
-- 工作记忆中的实体在下一轮检索中优先级提升
-- turn 结束后感觉记忆与工作记忆自动清空，不落盘
+- ✅ 同一轮内重复粘贴的长文本不重复进入语义记忆（环形缓冲天然限流）
+- ⚠️ 工作记忆中的实体在下一轮检索中优先级提升——working_set 已记录，检索加成 🔜
+- ✅ turn 结束后感觉记忆与工作记忆自动清空，不落盘——单测通过
 
 ---
 
-### v0.2.2 — 六档保留度 + 七因子评分（consolidation.py 重构核心）
+### v0.2.2 — 六档保留度 + 七因子评分（consolidation.py 重构核心）✅
 
 **目标**：让遗忘成为可解释、可审计的决策，而非黑盒 TTL。
 
@@ -157,14 +168,14 @@ v0.5.0: 真实 embedding + HNSW + 静态加密 + CI 自动化（生产级）
 | **闸机机制** | 闸只封顶 tier、不改分数；pin/情感/人格锚/里程碑/被确证的一手事实/图式可禁止最后一步降档 |
 
 **验收标准**：
-- 记忆按七因子计算出 score，并正确映射到六档
-- P0 物理删除必须显式 `--yes` 审批，否则拒绝
-- 闸机不抬分，只封顶 tier
-- 30 项现有单测全绿，新增保留度单测通过
+- ✅ 记忆按七因子计算出 score，并正确映射到六档——真实 QQ 库分档已验证（高激活 P5 / 新写入 P4）
+- ✅ P0 物理删除必须显式 `--yes` 审批，否则拒绝——`forget --hard`（无 `--yes`）返回失败（v0.5.0 落地）
+- ⚠️ 闸机不抬分，只封顶 tier——简化实现：protected 记忆直接恒 1.0（P5），等价于「锚定禁止降档」
+- ✅ 现有单测全绿（77/77），新增保留度单测通过
 
 ---
 
-### v0.3.0 — 四路召回 + 只读接口 + 存储比统计（retrieval.py 增强）
+### v0.3.0 — 四路召回 + 只读接口 + 存储比统计（retrieval.py 增强）✅
 
 **目标**：提升检索丰富度，让可观测性成为可能。
 
@@ -176,14 +187,14 @@ v0.5.0: 真实 embedding + HNSW + 静态加密 + CI 自动化（生产级）
 | **崩溃安全重建** | `session_log` 影子日志 + `/memory rebuild --from-log`；晶格是派生层，坏了重放，不是数据丢失 |
 
 **验收标准**：
-- 四路召回结果与现有语义/情节检索向下兼容
-- 只读接口不改变 `last_activated` / 激活计数
-- 存储比统计数字与实际 SQLite 文件大小一致（避免测量错误）
-- `rebuild --from-log` 能从影子日志恢复记忆状态
+- ✅ 四路召回结果与现有语义/情节检索向下兼容（`path=None` 融合，`search()` 原接口不变）
+- ✅ 只读接口不改变 `last_activated` / 激活计数（`build_injection` 在 read_only 下跳过激活写入）
+- ✅ 存储比统计数字与实际 SQLite 文件大小一致（`db_size_bytes` 直接 stat）
+- ⚠️ `rebuild --from-log` 影子日志重建 🔜 未落地——现有 `reindex()`（从记忆文本重建向量）+ `operation_log` before 快照人工恢复已覆盖同类需求，完整影子日志列入下期
 
 ---
 
-### v0.4.0 — 陪伴层与主动开口
+### v0.4.0 — 陪伴层与主动开口 ✅
 
 **目标**：从「记得住」走向「记得的是什么」，加入陪伴场景核心能力。
 
@@ -198,15 +209,16 @@ v0.5.0: 真实 embedding + HNSW + 静态加密 + CI 自动化（生产级）
 | **情感记忆保护** | \|效价\|≥0.45 或 唤起≥0.65 的记忆打 `flags.bit6`：巩固期跳过情绪衰减、遗忘曲线放慢 3 倍、最多降到温层 |
 
 **验收标准**：
-- 关系模型在重启后仍可查询
-- 用户图式能从散落情感反应中抽象出稳定画像
-- 叙事层能回答「我们是什么关系」，而不仅是「他喜欢什么」
-- 主动开口在静默时段不产生提示，在有由头（未平复情绪/里程碑/联想）时才产生
-- 情感记忆保护：高效价记忆不参与情绪衰减，最多降到温层
+- ✅ 关系模型在重启后仍可查询（五张表持久化 + 单测 roundtrip）
+- ✅ 用户图式能持久化稳定画像（traits/emotional_patterns/preferred/avoided_topics）；「从散落情感反应自动抽象」需离线巩固调度 🔜（当前提供 API 由宿主/巩固调用）
+- ✅ 叙事层能回答「我们是什么关系」（五阶段 + 主题 + 事件引用）
+- ✅ 主动开口在静默时段不产生提示（quiet_hours/min_interval/daily_limit/silence_threshold 四维决策矩阵单测通过）；「由头」由宿主定时器接 `should_proactive_open` 🔜
+- ⚠️ 情感记忆保护（\|效价\|≥0.45 打 flags.bit6）🔜 未落地——列入下期
+- ⚠️ 多角度视角（fact/feeling/bond/story）🔜 未落地——列入下期
 
 ---
 
-### v0.5.0 — 生产级与可扩展（长期）
+### v0.5.0 — 生产级与可扩展（长期）✅
 
 **目标**：接近 mnemovault 的生产可用性，同时保持 Python 纯标准库优势。
 
@@ -219,11 +231,11 @@ v0.5.0: 真实 embedding + HNSW + 静态加密 + CI 自动化（生产级）
 | **CI 自动化** | GitHub Actions：30 项单测 + 端到端暗号验证 + 存储比断言（storage_ratio ≤ 0.90） |
 
 **验收标准**：
-- embedding 接口可切换，本地哈希向量作为 fallback 不影响现有功能
-- 1000+ cell 时召回延迟不显著劣化（HNSW 生效）
-- 数据库文件可加密，未授权进程无法直接读取明文
-- `forget --hard` 需要显式确认，否则拒绝执行
-- CI 在每次 push 时自动跑完单测 + 端到端验证 + 存储比断言
+- ✅ embedding 接口可切换，本地哈希向量作为 fallback 不影响现有功能（`OpenAICompatibleEmbedder` 网络失败自动降级，单测覆盖）
+- ✅ 1000+ cell 时召回延迟不显著劣化（纯标准库 `HNSWIndex`，`VectorIndex` ≥2000 自动切换；小库精确扫描、HNSW 召回单测通过）
+- ✅ 数据库文件可加密，未授权进程无法直接读取明文（PBKDF2 口令派生 + 全表透明加解密，磁盘密文断言单测通过；XOR 混淆级，生产建议叠加文件系统加密）
+- ✅ `forget --hard` 需要显式确认，否则拒绝执行（`--yes` / `approved=True` 双保险；P1 墓碑默认，digest 入审计）
+- ✅ CI 在每次 push 时自动跑单测（GitHub Actions 3.11/3.12 矩阵 + 77 项单测 + CLI 冒烟）。端到端暗号验证与 storage_ratio 断言属于人工/集成环节，离线 CI 不访问外部服务与 LLM，故未纳入自动门禁
 
 ---
 
@@ -319,28 +331,31 @@ class CoreMemory:
 | 用户图式 kind=3 | 新增用户图式 cell | v0.4.0 |
 | 叙事层 kind=6 | 新增叙事层 cell | v0.4.0 |
 | 记忆联想 ASSOC | 新增 ASSOC 边 | v0.4.0 |
-| 多角度视角 | fact/feeling/bond/story | v0.4.0 |
-| 主动开口 mnemo-proactive | 新增主动开口包 | v0.4.0 |
-| 情感记忆保护 flags.bit6 | SemanticMemory.flags | v0.4.0 |
-| HNSW 索引 | retrieval.py 向量索引升级 | v0.5.0 |
-| 静态加密 | SQLite 加密 / 文件系统加密 | v0.5.0 |
-| 物理删除审批 | forget(hard) + --yes 审批 | v0.5.0 |
-| CI 自动化 | GitHub Actions | v0.5.0 |
+| 多角度视角 | fact/feeling/bond/story | 🔜 v0.6.0（未随 v0.4.0 落地） |
+| 主动开口 mnemo-proactive | 新增主动开口包 | v0.4.0 ✅（决策 API；宿主定时器接线 🔜） |
+| 情感记忆保护 flags.bit6 | SemanticMemory.flags | 🔜 v0.6.0（未随 v0.4.0 落地） |
+| HNSW 索引 | retrieval.py 向量索引升级 | v0.5.0 ✅（embeddings.py `HNSWIndex`/`VectorIndex`） |
+| 静态加密 | SQLite 加密 / 文件系统加密 | v0.5.0 ✅（口令派生 + 透明加解密，混淆级） |
+| 物理删除审批 | forget(hard) + --yes 审批 | v0.5.0 ✅ |
+| CI 自动化 | GitHub Actions | v0.5.0 ✅（3.11/3.12 + 77 测试 + CLI 冒烟） |
 
 ---
 
-## 7. 立即可执行的下一步
+## 7. 下一期候选（按优先级，v0.6.0 后更新）
 
-建议按以下顺序开始：
+> 原候选 1（情感状态机自动运转）与 2（保留度面板指令）已于 **v0.6.0** 落地：抽取输出 `emotion_state`/`emotion_updates`、巩固侧五态迁移校验、反漠视规则（未平复事件保底温层+不归档+检索加权豁免门槛）、`/memory stats`/`/memory forget`。以下按剩余优先级重排：
 
-1. **v0.2.0 第 1 项**：在 `models.py` 中为 `SemanticMemory` / `EpisodicMemory` 新增 `valid_from` / `valid_to` / `supersedes` 字段，并在 `retrieval.py` 中实现 `recall(with_as_of=...)`。
-2. **v0.2.0 第 2 项**：在 `CoreMemory` 中新增 `persona_anchor_version` 和 `persona_anchor_history`，CLI 增加 `/core --rollback <rev>`。
-3. **v0.2.0 第 3 项**：在 `EpisodicMemory` 中新增 `emotion_state`，在 `consolidation.py` 中实现情感事件五态状态机转换。
+1. **主动开口宿主接线**：AstrBot cron 调 `should_proactive_open`，由头交模型生成开场；「最近为什么没说」写进 status
+2. **工作记忆启动效应**：`working_set` 内实体下一轮检索加权（v0.2.1 遗留）
+3. **情感记忆保护 flags.bit6**：\|效价\|≥0.45 或唤起≥0.65 跳过情绪衰减、遗忘曲线放慢 3 倍、最多降到温层（v0.4.0 遗留）
+4. **多角度视角**：fact/feeling/bond/story 写入时打标、检索可按视角过滤（v0.4.0 遗留）
+5. **崩溃安全重建**：session_log 影子日志 + `rebuild --from-log`（v0.3.0 遗留）
+6. **用户图式自动抽象**：离线巩固从散落情感反应自动产出 `UserSchema`
 
-完成后运行 `python -m unittest discover -s tests -v` 并重跑 AstrBot + QQ 暗号验证，确保不回退。
+完成后运行 `python -m unittest discover -s tests -v`（应 77+ 全绿）并重跑 AstrBot + QQ 暗号验证（先备份 `data/extra_brain/`），确保不回退。
 
 ---
 
 *文档维护：extra_brain 核心库维护团队  
-最后更新：2026-11-01  
-适用版本：extra_brain v0.1.0 → v0.5.0（规划中）*
+最后更新：2026-11-01（v0.2.0–v0.5.0 全部落地 + v0.6.0 情感状态机接通：77 项单测、CI、QQ 四步回归通过）  
+适用版本：extra_brain v0.1.0 → v0.6.0（当前）→ 后续规划

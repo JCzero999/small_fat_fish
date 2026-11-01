@@ -23,6 +23,7 @@ from .models import (
     EpisodicMemory,
     SemanticMemory,
     StyleMemory,
+    is_unresolved_episode,
     new_memory_id,
     parse_iso8601,
     to_iso8601,
@@ -41,6 +42,7 @@ class ConsolidationReport:
     promoted: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
     core_pruned: list[str] = field(default_factory=list)
+    emotion_updated: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -53,6 +55,7 @@ class ConsolidationReport:
             or self.promoted
             or self.conflicts
             or self.core_pruned
+            or self.emotion_updated
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -65,8 +68,25 @@ class ConsolidationReport:
             "promoted": list(self.promoted),
             "conflicts": list(self.conflicts),
             "core_pruned": list(self.core_pruned),
+            "emotion_updated": list(self.emotion_updated),
             "warnings": list(self.warnings),
         }
+
+
+# 情感事件五态状态机（v0.2.0）：正向链 open→acknowledged→attended→resolved；
+# 任意状态可 dormant（旧事淡出）；dormant 被重新提起可回到 open/acknowledged。
+_EMOTION_FORWARD = ("open", "acknowledged", "attended", "resolved")
+
+
+def _emotion_transition_ok(current: str, target: str) -> bool:
+    if target == "dormant":
+        return current != "dormant"
+    if current == "dormant":
+        return target in ("open", "acknowledged")
+    try:
+        return _EMOTION_FORWARD.index(target) == _EMOTION_FORWARD.index(current) + 1
+    except ValueError:
+        return False
 
 
 def calculate_decay(
@@ -146,6 +166,7 @@ class Consolidator:
                 participants=["user", "agent"],
                 raw_reference=session_id,
                 last_activated=now_iso,
+                emotion_state=candidate.emotion_state,
             )
             touched_episodic.add(memory_id)
 
@@ -226,6 +247,24 @@ class Consolidator:
                 report.conflicts.append(target.id)
                 replacement = self._replacement_object(semantic, original_semantic, target)
                 superseded.append((target.object, replacement))
+
+        # 情感事件状态机（v0.2.0）：只允许向前推进或进入 dormant；非法转换拒绝并记警告。
+        for update in extraction.emotion_updates:
+            target = episodic.get(update.episodic_id)
+            if target is None:
+                report.warnings.append(f"unknown emotion episode: {update.episodic_id}")
+                continue
+            current = target.emotion_state or "open"
+            if not _emotion_transition_ok(current, update.to_state):
+                report.warnings.append(
+                    f"rejected emotion transition {current} -> {update.to_state} "
+                    f"for {update.episodic_id}"
+                )
+                continue
+            if current != update.to_state:
+                target.emotion_state = update.to_state
+                touched_episodic.add(target.id)
+                report.emotion_updated.append(target.id)
 
         for memory_id in touched_episodic:
             if memory_id not in original_episodic:
@@ -464,6 +503,10 @@ class Consolidator:
                 memory.decay_score = self._calculate_retention_score(
                     memory, now
                 )
+                # 反漠视（v0.2.0）：未平复的情感事件不衰减——评分保底温层，永不自动归档。
+                unresolved = is_unresolved_episode(memory)
+                if unresolved:
+                    memory.decay_score = max(memory.decay_score, 0.60)
                 days_inactive = max(
                     0.0,
                     (now - parse_iso8601(last_activated)).total_seconds() / 86400,
@@ -472,6 +515,7 @@ class Consolidator:
                 memory.protected = memory_id in core.protected_memories
                 if (
                     not memory.protected
+                    and not unresolved
                     and memory.retention_tier == 4
                     and days_inactive >= self.config.archive_after_days
                 ):

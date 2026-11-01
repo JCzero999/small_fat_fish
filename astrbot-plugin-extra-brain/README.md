@@ -9,6 +9,7 @@
 - **peer 隔离**：私聊按人、群聊按群、WebChatUI 按登录用户（跨对话共享）——一个 peer 一个 SQLite 库
 - **降级安全**：注入失败照常对话；巩固失败消息回缓冲下轮重试；无 `DEEPSEEK_API_KEY` 时只读
 - **双后端**：`local`（进程内直连，零部署）/ `http`（调用 `extra_brain.server` sidecar）
+- **v0.5.0 能力**（记忆库侧提供，随版本自动生效）：双时态 `as_of` 检索、四路召回、七因子保留度分档、只读挂载、静态加密（可选）、P1 墓碑遗忘。适配器的注入/巩固/指令链路**零改动**即享受全部升级——再次印证「记忆库是产品，宿主是挂载点」
 
 ## 安装
 
@@ -42,7 +43,10 @@
 /memory consolidate           # 立即巩固缓冲中的对话
 /memory core                  # 查看 Core Memory（JSON）
 /memory list [semantic|episodic|style]   # 列出记忆（前 20 条）
-/memory search <查询>         # 检索记忆（仅 local 后端）
+/memory search <查询>         # 检索记忆（多词查询自动合并；仅 local 后端）
+/memory stats                 # 记忆库分层统计（保留度档位/归档比例/体积）
+/memory forget <id>           # P1 墓碑化（清内容、留摘要与审计）
+/memory forget <id> --hard --yes   # P0 物理删除（双确认，适配器不会自动批准）
 ```
 
 ## 验证（跨会话暗号法）
@@ -63,6 +67,7 @@ QQ 侧 peer 天然按 QQ 号隔离（`aiocqhttp:FriendMessage:<QQ号>`），群�
 ## 已验证环境
 
 - AstrBot 4.29.4（Python 3.12，conda env `astrbot`）
-- extra-brain 0.1.0（editable 安装指向仓库 src/）
+- extra-brain 0.5.0（editable 安装指向仓库 src/）
 - WebChatUI + QQ（NapCat Shell 4.18.41 / QQ NT 9.9.33-52230，机器人号 1178469499），DeepSeek `deepseek-flash` 对话 + 抽取
 - 2026-10-31 WebChatUI 跨会话暗号验证通过；2026-11-01 QQ 私聊跨上下文暗号验证通过（详见 `../docs/CHANGELOG.md`）
+- 2026-11-01 **v0.5.0 升级回归通过**：备份 → 重启 → 旧记忆零丢失（QQ 15 条）→ 新暗号四步验证 → 七因子分档在真实数据生效

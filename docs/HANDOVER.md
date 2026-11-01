@@ -1,15 +1,15 @@
 # 交接文档（Handover）
 
 > 给接手本仓库的人：这份文档说明「现在做到哪了、怎么跑起来、有哪些坑、下一步干什么」。
-> 最后更新：2026-11-01 凌晨（QQ 通道验证通过后）。
+> 最后更新：2026-11-01 午后（v0.6.0：情感状态机接通 + 文档整册对齐）。
 
 ---
 
 ## 1. 项目是什么
 
-「额外大脑」（extra_brain）：给陪伴型 Agent 加一套**跨会话长期记忆**。核心理念不是「存下所有聊天」，而是**少量、高相关、可解释、可遗忘**，让模型在任意新上下文里仍能维持连续的身份、关系与「被记住的感觉」。
+「额外大脑」（extra_brain）：给陪伴型 Agent 加一套**跨会话长期记忆**。核心理念不是「存下所有聊天」，而是**少量、高相关、可解释、可遗忘**，让模型在任意新上下文里仍能维持连续的身份、关系与「被记住的感觉」。**当前 v0.6.0**。
 
-完整规格见 `长期记忆「额外大脑」架构规范 v0.9.md`；Python 库用法见 `README.md`；**挂载到任意宿主的通用契约见 `MOUNT.md`**；AstrBot 插件细节见 `../astrbot-plugin-extra-brain/README.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`。本文档位于 `docs/` 目录。
+完整规格见 `长期记忆「额外大脑」架构规范 v0.9.md`；Python 库用法见 `README.md`；**迭代路线图见 `MEMORY_ITERATION_PLAN.md`（v0.2–v0.5 已全部落地）**；**挂载到任意宿主的通用契约见 `MOUNT.md`**；AstrBot 插件细节见 `../astrbot-plugin-extra-brain/README.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`。本文档位于 `docs/` 目录。
 
 系统分层（**记忆库是产品，宿主是可替换挂载点**）：
 
@@ -35,15 +35,17 @@
 
 | 部分 | 状态 |
 |------|------|
-| Python 记忆库（四类记忆/抽取/检索/衰减/审计） | ✅ 已落地，30 项单测通过（Python 3.12 亦全绿），真实 DeepSeek + 三天闭环联测通过 |
-| sidecar（HTTP 服务） | ✅ 已落地，桥接冒烟通过 |
+| Python 记忆库 | ✅ **v0.6.0**：四类记忆 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则）+ 感觉/工作记忆 + 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动）+ HNSW + 静态加密 + P0/P1 遗忘审批。**77 项单测全绿**（3.11/3.12 双版本 CI），真实 DeepSeek + 三天闭环联测通过 |
+| sidecar（HTTP 服务） | ✅ 已落地并扩展：`/stats`、`/forget`、`--read-only`、加密口令透传 |
+| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 77 项单测 + CLI 冒烟 |
 | **AstrBot 适配器** | ✅ **已端到端验证**：注入、巩固、peer 跨会话共享、`/memory` 指令、暗号验证通过（2026-10-31） |
-| **QQ 通道（NapCat + OneBot v11）** | ✅ **已端到端验证**：私聊按 QQ 号隔离记忆、`/reset` 后跨上下文答出暗号「海豚-3311」（2026-11-01） |
+| **QQ 通道（NapCat + OneBot v11）** | ✅ **已端到端验证**：私聊按 QQ 号隔离记忆、`/reset` 后跨上下文答出暗号（2026-11-01） |
+| **v0.5.0 升级回归** | ✅ 2026-11-01：先备份 → 重启 → 旧记忆零丢失（QQ 15 条 + WebChat 1 条）→ 新暗号「金枪鱼-8866」四步验证通过；七因子分档在真实数据生效（高激活 P5 / 新写入 P4） |
 | 挂载规范 `docs/MOUNT.md` | ✅ 已沉淀（两挂载面 + 四契约 + 接入清单） |
 | DSH 适配器 | ⛔ 插件模块加载失败（根因已定位见坑 4，**已被 AstrBot 路线取代，暂搁置**） |
-| 定时/消息阈值自动巩固 | ✅ 阈值触发已实现（AstrBot 适配器内）；每日窗口 🔜 可选 |
+| 定时/消息阈值自动巩固 | ✅ 阈值触发已实现（AstrBot 适配器内）；主动开口决策 API 已就绪（`should_proactive_open`），宿主定时器接线 🔜 |
 
-**一句话**：记忆库 → AstrBot → QQ 全链路已跑通并验证；机器人 QQ 号 `1178469499` 常驻本机。下一步是日常使用中打磨记忆库本体。
+**一句话**：记忆库 v0.6.0（路线规划特性全部落地 + 情感状态机接通、77 测试、CI）→ AstrBot → QQ 全链路跑通；机器人 QQ 号 `1178469499` 常驻本机；旧数据在新代码下零迁移兼容。
 
 ---
 
@@ -53,22 +55,26 @@
 small_fat_fish/
 ├── docs/
 │   ├── 长期记忆「额外大脑」架构规范 v0.9.md  # 设计规范 + 第10节实现对照
-│   ├── README.md                          # Python 库接入与运行说明
+│   ├── README.md                          # Python 库接入与运行说明（v0.5.0）
 │   ├── MOUNT.md                           # ★ 挂载规范：任何宿主接入 extra_brain 的通用契约
+│   ├── MEMORY_ITERATION_PLAN.md           # ★ 迭代路线图（v0.2→v0.5 已全部落地）
 │   ├── CHANGELOG.md                       # 变更记录
 │   └── HANDOVER.md                        # 本文档
-├── pyproject.toml                        # 包定义（无第三方依赖）
+├── .github/workflows/ci.yml              # CI：3.11/3.12 + 77 测试 + CLI 冒烟
+├── pyproject.toml                        # 包定义（无第三方依赖，version 0.5.0）
 ├── src/extra_brain/                      # ★ 核心库（宿主无关，打磨对象）
 │   ├── models.py config.py embeddings.py extraction.py
 │   ├── storage.py consolidation.py retrieval.py
 │   ├── session.py engine.py server.py cli.py
-├── scripts/demo_closed_loop.py           # 三天跨会话闭环演示
+├── scripts/                              # start-all / stop-all / status-all + demo_closed_loop
 ├── astrbot-plugin-extra-brain/           # ★ AstrBot 适配器（当前主力挂载）
 │   ├── main.py                           # 薄适配器：双钩子 + /memory 指令 + local/http 双后端
 │   ├── _conf_schema.json                 # WebUI 配置面板 schema
 │   └── README.md
-├── dsh-plugin-extra-brain/               # DSH 适配器（暂搁置，加载坑见 §6 坑 3）
-└── tests/                                # 30 项测试
+├── dsh-plugin-extra-brain/               # DSH 适配器（暂搁置，加载坑见 §6 坑 4）
+└── tests/                                # 77 项测试（test_extra_brain 24 + test_server 8 + test_v2_features 45）
+
+* test_v2_features 覆盖 v0.2–v0.5 全部新特性 + 情感状态机集成链路（双时态/人格锚/保留度/四路召回/陪伴层/加密/HNSW/遗忘链/emotion_state）。
 ```
 
 ---
@@ -153,24 +159,33 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 7. **AstrBot 配置改动需重启**：provider 等写 `cmd_config.json` 后运行中实例不热加载（插件代码可以 `-r` 热重载，或重启）；但**平台(bots)配置是动态加载的**——API/面板里新增 bot 不用重启即可生效。
 8. **QQ 私聊免唤醒前缀，群聊需要 @ 或 `/` 前缀**（`friend_message_needs_wake_prefix: false` 默认）。白名单启用但为空 = 放行所有会话。
 9. **conda 需要 ToS**：`conda create` 前先 `conda tos accept --override-channels --channel <三个官方渠道>`（2026-10 首次遇到）。
-10. **GitHub 直连 clone 被重置**：本机网络对 github git 传输不通（API 域名与 release 直链下载可用）。AstrBot 源码/依赖走 **PyPI**（`pip install astrbot`）；NapCat 走 **release 直链**；文档走 jsdelivr CDN 镜像。
+10. **GitHub 直连 clone/push 被重置**：本机网络对 github git 传输不通（API 域名与 release 直链下载可用）。AstrBot 源码/依赖走 **PyPI**（`pip install astrbot`）；NapCat 走 **release 直链**；文档走 jsdelivr CDN 镜像。推送走本地代理：`git config --global http.proxy socks5://127.0.0.1:36600`（代理软件端口，端口变了自己查）。
+11. **v0.2–v0.5 新字段向后兼容，旧库零迁移**：新字段（valid_from/valid_to/supersedes/retention_tier/emotion_state/persona_anchor_*）全部可选、缺省安全；建表 `IF NOT EXISTS`。**但升级前照例先备份 `data/extra_brain/`**（2026-11-01 的备份在 `data/extra_brain_backup_20261101/`，含 WAL 边车文件）。
+12. **静态加密默认关闭**：不设 `EXTRA_BRAIN_ENCRYPTION_PASSPHRASE` 即明文透明模式。一旦设了口令写库，换口令就读不回（XOR 混淆级，非 AES；生产叠加文件系统加密）。**给已有旧库首次开加密前必须先备份**。
+13. **P0 物理删除唯一入口是显式审批**：`forget <id> --hard --yes` 或 API `approved=True`；不带审批永远停在 P1 墓碑（内容清空、digest 留审计）。不要给宿主适配器自动接 `--yes`。
 
 ---
 
 ## 7. 下一步（建议顺序）
 
-1. **日常使用 + 打磨记忆库本体**（当前重心）：QQ/ChatUI 真实使用中观察抽取质量/检索相关性/改口冲突，库代码改动 → 重启 bot 即生效（editable 安装直连仓库 src/）。
-2. **群聊场景**：把机器人拉进群实测（peer 已按群号隔离；群聊需 @机器人 或 `/` 前缀唤醒）；观察群聊多人共享记忆库的行为是否符合预期。
-3. **每日定时巩固窗口**（规范 §5.1 第三触发）：AstrBot 有 cron 体系，可在适配器注册每日任务调 consolidate。
-4. **持久化运行**：目前 AstrBot/NapCat 都挂在后台 job 里，重启机器后需手动按 §4 拉起；可做成计划任务/NSSM 服务或 `astrbot run -r` + 开机自启。
-5. 可选：真实 tokenizer、更强 embedding Provider、`http` 后端多宿主共享部署。
-6. 搁置：DSH 插件加载修复（等有需要再按坑 4 方案修）。
+> v0.2→v0.5 的路线（`MEMORY_ITERATION_PLAN.md`）已全部落地；情感状态机与 /memory stats/forget 已接通（2026-11-01）。以下是剩余收尾与下一期候选：
+
+1. ~~**emotion_state 接进抽取链路**~~ ✅ 已落地：抽取 prompt 输出 `emotion_state`（新事件默认 open）与 `emotion_updates`（推进已有情节）；巩固侧状态机校验迁移（非法转换拒绝并记警告）；反漠视规则生效——未平复事件（open/acknowledged/attended 且带情绪）保底温层、永不自动归档、检索加权 +0.10 并豁免分数门槛。77 项单测覆盖。
+2. ~~**`/memory status` 展示保留度档位分布**~~ ✅ 已落地：`/memory stats`（档位分布/归档比例/库体积）；`/memory forget <id>`（P1 墓碑默认；P0 物理删除需 `--hard --yes` 双确认，适配器不会自动批准）。
+3. **主动开口定时器接线** 🔜：`should_proactive_open` 决策 API 已就绪，需要在 AstrBot 适配器注册 cron（AstrBot 有定时体系），拿「由头」交给模型生成开场白。
+4. **工作记忆启动效应** 🔜：`working_set` 内实体下一轮检索加权（v0.2.1 遗留）。
+5. **情感记忆保护 flags.bit6 / 多角度视角** 🔜：\|效价\|≥0.45 或唤起≥0.65 的记忆跳过情绪衰减、最多降到温层；fact/feeling/bond/story 四视角打标（v0.4.0 遗留）。
+6. **群聊场景实测**：把机器人拉进群（peer 已按群号隔离；群聊需 @机器人 或 `/` 前缀唤醒）；观察群聊多人共享记忆库的行为是否符合预期。
+7. **每日定时巩固窗口**（规范 §5.1 第三触发）：适配器注册每日任务调 consolidate。
+8. **持久化运行**：AstrBot/NapCat 都挂在后台 job 里，重启机器后需手动按 §4 拉起；可做成计划任务/NSSM 服务。
+9. 可选：真实 tokenizer 预算、`http` 后端多宿主共享部署、embedding 服务地址配置进 AstrBot 面板。
+10. 搁置：DSH 插件加载修复（等有需要再按坑 4 方案修）。
 
 ---
 
 ## 8. 交接要点速查
 
-- **跑测试**：`python -m unittest discover -s tests -v`（应 30/30 OK，3.11/3.12 均可）
+- **跑测试**：`python -m unittest discover -s tests -v`（应 77/77 OK，3.11/3.12 均可）
 - **启动全部**：`$env:DEEPSEEK_API_KEY="<key>"; .\scripts\start-all.ps1 [QQ号]`（工作目录：仓库根；AstrBot 运行目录固定为 `D:\projects_software\astrbot-runtime`）
 - **停止全部**：`.\scripts\stop-all.ps1`
 - **查看状态**：`.\scripts\status-all.ps1`

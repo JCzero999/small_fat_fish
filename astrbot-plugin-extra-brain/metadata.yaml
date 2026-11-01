@@ -1,5 +1,5 @@
 name: astrbot_plugin_extra_brain
-desc: 长期记忆「额外大脑」——每轮注入跨会话记忆，按轮巩固对话，支持 local/http 双后端
-version: v0.1.0
+desc: 长期记忆「额外大脑」——每轮注入跨会话记忆，按轮巩固对话，支持 local/http 双后端；v0.5 能力：/memory stats 分层统计、/memory forget 遗忘审批（P1 墓碑 / P0 双确认物理删除）
+version: v0.5.0
 author: small_fat_fish
 repo: https://github.com/small_fat_fish/astrbot_plugin_extra_brain

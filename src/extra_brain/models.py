@@ -573,6 +573,20 @@ class StyleMemory:
 Memory = SemanticMemory | EpisodicMemory
 
 
+def is_unresolved_episode(memory: Memory) -> bool:
+    """未平复的情感事件：显式处于 open/acknowledged/attended 且确实带情绪标签。
+
+    反漠视设计（v0.2.0）：这类记忆不自动归档、检索时强制优先回忆。
+    旧库数据 emotion_state 为 None 时维持原行为（可正常归档），只有状态机
+    明确标记为「尚未处理完」的事件才享受保护。
+    """
+    return (
+        isinstance(memory, EpisodicMemory)
+        and memory.emotion_state in ("open", "acknowledged", "attended")
+        and bool(memory.emotions)
+    )
+
+
 @dataclass(slots=True)
 class RelationshipModel:
     """v0.4.0 关系模型（kind=5）：持久化的人际关系状态，重启后恢复。

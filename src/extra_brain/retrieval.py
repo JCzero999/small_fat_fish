@@ -15,6 +15,7 @@ from .models import (
     Memory,
     SemanticMemory,
     estimate_tokens,
+    is_unresolved_episode,
     parse_iso8601,
     utc_now,
 )
@@ -431,7 +432,11 @@ class MemoryRetriever:
                 + 0.20 * recency
                 + 0.15 * emotion
             )
-            if final_score < self.config.min_retrieval_score:
+            # 反漠视（v0.2.0）：未平复的情感事件强制优先回忆，加 0.10 权重并豁免分数门槛。
+            unresolved = is_unresolved_episode(memory)
+            if unresolved:
+                final_score = min(1.0, final_score + 0.10)
+            if final_score < self.config.min_retrieval_score and not unresolved:
                 continue
             scored.append(
                 ScoredMemory(

@@ -54,7 +54,14 @@ DEEP_EXTRACTION_PROMPT = """你是一个极度严谨的长期记忆整理官。�
       "summary": "",
       "key_moments": [],
       "emotions": [],
-      "importance": 0.0
+      "importance": 0.0,
+      "emotion_state": "open|acknowledged|attended|resolved|dormant"
+    }
+  ],
+  "emotion_updates": [
+    {
+      "episodic_id": "",
+      "to_state": "acknowledged|attended|resolved|dormant"
     }
   ],
   "style_observations": [
@@ -73,6 +80,13 @@ DEEP_EXTRACTION_PROMPT = """你是一个极度严谨的长期记忆整理官。�
 3. 用户前后矛盾时必须在 conflicts_detected 中标注
 4. importance ≥ 0.8 的条目需要有明确理由支撑（在 detail 或 summary 中体现）
 5. 线程宁合勿分：同一主题（如「准备面试」）只保留一个线程，新信息更新已有线程，不要重复新建
+6. 情感事件状态机（emotion_state）：新提取的情绪事件默认 "open"（用户表达了情绪但本轮尚未被回应/安抚）；
+   若对话显示用户的情绪已经被接住、被回应 → "acknowledged"；被认真讨论/陪伴 → "attended"；
+   用户明确表示想通了/释怀/翻篇 → "resolved"；提及旧事但情绪已淡、只是顺带 → "dormant"。
+   判断不了就写 "open"——未平复的情绪不应衰减，会被强制优先回忆（反漠视设计）。
+7. emotion_updates：当本轮对话推进了「已有长期记忆」中某条情节记忆（kind=episodic）的情感状态时，
+   输出 {"episodic_id":"已有情节记忆完整ID","to_state":"acknowledged|attended|resolved|dormant"}。
+   只允许向前推进（open→acknowledged→attended→resolved，或任意→dormant），禁止编造 ID，状态不明确时省略。
 
 数组元素的精确格式（用于消除原规范中的歧义）：
 - user_profile_changes: {"field":"preferred_name|key_traits|core_preferences|important_life_facts","value":"字符串","operation":"set|add|remove"}
@@ -145,6 +159,15 @@ class EpisodicCandidate:
     key_moments: list[str]
     emotions: list[str]
     importance: float
+    emotion_state: str = "open"
+
+
+@dataclass(frozen=True, slots=True)
+class EmotionUpdate:
+    """对已有情节记忆的情感状态推进（v0.2.0 状态机的模型侧输入）。"""
+
+    episodic_id: str
+    to_state: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +188,7 @@ class ExtractionResult:
     core_candidate_updates: CoreCandidateUpdates = field(default_factory=CoreCandidateUpdates)
     semantic_facts: list[SemanticCandidate] = field(default_factory=list)
     episodic_events: list[EpisodicCandidate] = field(default_factory=list)
+    emotion_updates: list[EmotionUpdate] = field(default_factory=list)
     style_observations: list[StyleCandidate] = field(default_factory=list)
     conflicts_detected: list[ConflictDetection] = field(default_factory=list)
 
@@ -181,6 +205,7 @@ class ExtractionResult:
                 "style_observations",
                 "conflicts_detected",
             },
+            {"emotion_updates"},
         )
         core = _mapping(data["core_candidate_updates"], "core_candidate_updates")
         _keys(
@@ -285,13 +310,39 @@ class ExtractionResult:
         events = []
         for index, item in enumerate(_array(data["episodic_events"], "episodic_events")):
             entry = _mapping(item, f"episodic_events[{index}]")
-            _keys(entry, f"episodic_events[{index}]", {"summary", "key_moments", "emotions", "importance"})
+            _keys(
+                entry,
+                f"episodic_events[{index}]",
+                {"summary", "key_moments", "emotions", "importance"},
+                {"emotion_state"},
+            )
             events.append(
                 EpisodicCandidate(
                     summary=_string(entry["summary"], "episodic.summary"),
                     key_moments=_string_list(entry["key_moments"], "episodic.key_moments"),
                     emotions=_string_list(entry["emotions"], "episodic.emotions"),
                     importance=_number(entry["importance"], "episodic.importance"),
+                    emotion_state=_choice(
+                        entry.get("emotion_state", "open"),
+                        "episodic.emotion_state",
+                        ("open", "acknowledged", "attended", "resolved", "dormant"),
+                    ),
+                )
+            )
+
+        emotion_updates = []
+        raw_updates = data.get("emotion_updates", [])
+        for index, item in enumerate(_array(raw_updates, "emotion_updates")):
+            entry = _mapping(item, f"emotion_updates[{index}]")
+            _keys(entry, f"emotion_updates[{index}]", {"episodic_id", "to_state"})
+            emotion_updates.append(
+                EmotionUpdate(
+                    episodic_id=_string(entry["episodic_id"], "emotion_update.episodic_id"),
+                    to_state=_choice(
+                        entry["to_state"],
+                        "emotion_update.to_state",
+                        ("acknowledged", "attended", "resolved", "dormant"),
+                    ),
                 )
             )
 
@@ -333,6 +384,7 @@ class ExtractionResult:
             ),
             semantic_facts=facts,
             episodic_events=events,
+            emotion_updates=emotion_updates,
             style_observations=styles,
             conflicts_detected=conflicts,
         )

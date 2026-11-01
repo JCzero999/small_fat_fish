@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-11-01（下午） — extra_brain v0.6.0：情感状态机接通 + 文档全面更新 ✅
+
+### 新增
+- ✅ **emotion_state 接入抽取链路**：深度抽取 prompt 新增铁律 6/7（新事件默认 `open`、可用 `emotion_updates` 推进已有情节记忆）；`ExtractionResult` 新增 `emotion_updates: list[EmotionUpdate]`（可选字段，旧 prompt 输出向后兼容）；`EpisodicCandidate.emotion_state` 默认 `open`
+- ✅ **巩固侧五态状态机**：`_emotion_transition_ok` 校验迁移（open→acknowledged→attended→resolved 正向链、任意→dormant、dormant 可被重新提起回 open/acknowledged）；非法转换拒绝并记警告；`ConsolidationReport.emotion_updated` 列表输出
+- ✅ **反漠视规则生效**：未平复情感事件（open/acknowledged/attended 且带情绪）保留度保底 0.60（温层）、永不自动归档、检索加权 +0.10 并豁免 min_retrieval_score；`models.is_unresolved_episode()` 公共判定，emotion_state=None 的旧库数据维持原行为不误保护
+- ✅ **AstrBot 适配器新指令**：`/memory stats`（保留度档位分布/归档比例/库体积）、`/memory forget <id>`（P1 墓碑默认；P0 物理删除需 `--hard --yes` 双确认，适配器永不自动批准）；`/memory search` 改用 `GreedyStr` 支持多词查询；local/http 双后端均接通
+- ✅ **包根导出补全**：抽取候选类（`SemanticCandidate`/`EpisodicCandidate`/`EmotionUpdate`/…）、`is_unresolved_episode` 等
+- ✅ sidecar `ExtraBrainServer` 支持 `read_only` / `encryption_passphrase` 透传；`make_server`/`--read-only`/`--encryption-passphrase` 启动参数
+
+### 文档全面更新（v0.5.0 落地后首次整册对齐）
+- ✅ `docs/README.md`：v0.1→v0.6 全部能力分节记录；CLI 清单补 forget/stats/associate/rollback；新增「情感事件状态机与反漠视」节；存储表清单补 v0.4.0 五表；验证边界更新 77 项
+- ✅ `docs/HANDOVER.md`：状态快照/文件树/下一步全部对齐 v0.6.0；新增坑 11–13（旧库零迁移但先备份、加密默认关闭且首开前必须备份、P0 审批链）；代理推送经验入坑 10
+- ✅ `docs/MOUNT.md` 升 v1.1：新增 §2.5 可选契约（只读挂载/主动开口/遗忘审批/存储观测）；§4 数据即资产补加密与删除注意项
+- ✅ `docs/MEMORY_ITERATION_PLAN.md` 升 v1.2：落地状态总览表、各版本验收逐条打勾（含诚实标注 🔜 遗留项）、§7 重写为 v0.6 之后的候选清单
+- ✅ `astrbot-plugin-extra-brain/README.md` + `metadata.yaml`：指令清单、版本 v0.5.0、v0.5.0 升级回归记录
+
+### 验证
+- ✅ **77 项单测全绿**（24 基础 + 8 sidecar + 45 特性；新增情感状态机集成 7 项：默认 open/显式标注/推进/非法迁移拒绝/反漠视归档保护+对照组/检索判定/schema 校验；新增 sidecar `/stats` `/forget` 端点 2 项）
+- ✅ 适配器签名用真实 AstrBot 包验证 `inspect.signature(..., eval_str=True)` 解析 `GreedyStr` 通过
+- ⚠️ 过程教训：PowerShell `Get-Content` 按 GBK 误读 UTF-8 中文导致 consolidation.py 一度乱码，`git checkout` 恢复后以编辑工具重做——**批处理改文本一律走 Python（显式 utf-8）**
+
+---
+
 ## 2026-11-01 — extra_brain v0.2.0 → v0.5.0 五连跳迭代 ✅
 
 按 `docs/MEMORY_ITERATION_PLAN.md` 路线图，一次会话内完成全部规划特性。单测从 30 项扩到 **68 项**，全绿；数据库新字段全部向后兼容（旧 `.db` 直接可读）。

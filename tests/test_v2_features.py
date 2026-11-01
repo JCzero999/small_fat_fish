@@ -641,6 +641,178 @@ class CosineHelperTests(unittest.TestCase):
             cosine_similarity([1, 0], [1, 0, 0])
 
 
+class EmotionStateMachineIntegrationTests(TempDbTestCase):
+    """v0.6.0-pre：emotion_state 真正接入抽取 → 巩固 → 检索/归档链路。"""
+
+    def test_new_event_defaults_to_open_state(self) -> None:
+        from extra_brain import EpisodicCandidate, ExtractionResult
+
+        result = ExtractionResult(
+            episodic_events=[
+                EpisodicCandidate(
+                    summary="用户提到面试很焦虑",
+                    key_moments=["我一想到面试就慌"],
+                    emotions=["焦虑"],
+                    importance=0.85,
+                )
+            ]
+        )
+        with ExtraBrain(self.db_path, extractor=FakeExtractor(result)) as brain:
+            brain.consolidate("用户：我一想到面试就慌。")
+            episodes = brain.store.list_episodic()
+            self.assertEqual(episodes[0].emotion_state, "open")
+
+    def test_explicit_state_from_extractor(self) -> None:
+        from extra_brain import EpisodicCandidate, ExtractionResult
+
+        result = ExtractionResult(
+            episodic_events=[
+                EpisodicCandidate(
+                    summary="用户说想通了",
+                    key_moments=["我决定接受offer"],
+                    emotions=["释然"],
+                    importance=0.8,
+                    emotion_state="resolved",
+                )
+            ]
+        )
+        with ExtraBrain(self.db_path, extractor=FakeExtractor(result)) as brain:
+            brain.consolidate("用户：我想通了，决定接受offer。")
+            self.assertEqual(brain.store.list_episodic()[0].emotion_state, "resolved")
+
+    def test_emotion_updates_advance_state(self) -> None:
+        from extra_brain import (
+            EmotionUpdate,
+            EpisodicCandidate,
+            ExtractionResult,
+        )
+
+        first = ExtractionResult(
+            episodic_events=[
+                EpisodicCandidate(
+                    summary="用户很孤独",
+                    key_moments=["那天没人陪我"],
+                    emotions=["孤独"],
+                    importance=0.9,
+                )
+            ]
+        )
+        with ExtraBrain(self.db_path, extractor=FakeExtractor(first)) as brain:
+            brain.consolidate("用户：那天我很孤独。")
+            episode_id = brain.store.list_episodic()[0].id
+
+        second = ExtractionResult(
+            emotion_updates=[EmotionUpdate(episodic_id=episode_id, to_state="acknowledged")]
+        )
+        with ExtraBrain(self.db_path, extractor=FakeExtractor(second)) as brain:
+            report = brain.consolidate("用户：好一些了。")
+            self.assertIn(episode_id, report.emotion_updated)
+            self.assertEqual(brain.store.get_episodic(episode_id).emotion_state, "acknowledged")
+
+    def test_illegal_transition_rejected_with_warning(self) -> None:
+        from extra_brain import EmotionUpdate, EpisodicCandidate, ExtractionResult
+
+        first = ExtractionResult(
+            episodic_events=[
+                EpisodicCandidate(
+                    summary="用户很孤独",
+                    key_moments=["没人陪"],
+                    emotions=["孤独"],
+                    importance=0.9,
+                    emotion_state="open",
+                )
+            ]
+        )
+        with ExtraBrain(self.db_path, extractor=FakeExtractor(first)) as brain:
+            brain.consolidate("用户：我很孤独。")
+            episode_id = brain.store.list_episodic()[0].id
+
+        # open → resolved 跳两步，非法；open → attended 合法但顺序对（open→acknowledged→attended）
+        for bad_target, expect_reject in (("attended", True), ("acknowledged", False)):
+            second = ExtractionResult(
+                emotion_updates=[EmotionUpdate(episodic_id=episode_id, to_state=bad_target)]
+            )
+            with ExtraBrain(self.db_path, extractor=FakeExtractor(second)) as brain:
+                if expect_reject:
+                    brain.consolidate("用户：随便聊聊。")
+                    self.assertEqual(
+                        brain.store.get_episodic(episode_id).emotion_state, "open"
+                    )
+                else:
+                    brain.consolidate("用户：谢谢你听我说。")
+                    self.assertEqual(
+                        brain.store.get_episodic(episode_id).emotion_state, "acknowledged"
+                    )
+
+    def test_unresolved_episode_not_archived_when_stale(self) -> None:
+        from extra_brain import ExtractionResult
+
+        very_old = NOW - timedelta(days=3650)
+        with ExtraBrain(self.db_path, extractor=FakeExtractor(ExtractionResult())) as brain:
+            memory = make_episodic(
+                "ep_stale_emotional",
+                timestamp=to_iso8601(very_old),
+                last_activated=to_iso8601(very_old),
+                importance=0.3,
+                summary="用户很孤独",
+                emotions=["孤独"],
+                emotion_state="open",
+            )
+            brain.store.save_episodic(memory)
+            brain._consolidator.consolidate("用户：随便聊聊。", now=NOW)
+            stale = brain.store.get_episodic("ep_stale_emotional")
+            self.assertFalse(stale.archived, "未平复情感事件不应自动归档")
+            self.assertGreaterEqual(stale.decay_score, 0.55)
+
+            # 对照组：同年代但 emotion_state=None 的旧情节可正常归档
+            legacy = make_episodic(
+                "ep_stale_legacy",
+                timestamp=to_iso8601(very_old),
+                last_activated=to_iso8601(very_old),
+                importance=0.3,
+                summary="普通旧事",
+                emotions=["平静"],
+                emotion_state=None,
+            )
+            brain.store.save_episodic(legacy)
+            brain._consolidator.consolidate("用户：还是随便聊聊。", now=NOW)
+            self.assertTrue(brain.store.get_episodic("ep_stale_legacy").archived)
+
+    def test_unresolved_episode_gets_retrieval_boost(self) -> None:
+        from extra_brain.models import is_unresolved_episode
+
+        memory = make_episodic("ep_open", emotions=["孤独"], emotion_state="open")
+        self.assertTrue(is_unresolved_episode(memory))
+        resolved = make_episodic("ep_resolved", emotions=["孤独"], emotion_state="resolved")
+        self.assertFalse(is_unresolved_episode(resolved))
+        legacy = make_episodic("ep_legacy", emotions=["孤独"], emotion_state=None)
+        self.assertFalse(is_unresolved_episode(legacy))
+
+    def test_emotion_updates_schema_validation(self) -> None:
+        from extra_brain import ExtractionResult
+
+        payload = {
+            "core_candidate_updates": {
+                "user_profile_changes": [],
+                "relationship_changes": [],
+                "new_or_updated_threads": [],
+                "should_promote_to_core": [],
+            },
+            "semantic_facts": [],
+            "episodic_events": [],
+            "emotion_updates": [{"episodic_id": "ep_x", "to_state": "invalid"}],
+            "style_observations": [],
+            "conflicts_detected": [],
+        }
+        with self.assertRaises(MemoryValidationError):
+            ExtractionResult.from_dict(payload)
+
+        # emotion_updates 可缺省（向后兼容旧 prompt 输出）
+        payload.pop("emotion_updates")
+        result = ExtractionResult.from_dict(payload)
+        self.assertEqual(result.emotion_updates, [])
+
+
 class ForgetChainTests(TempDbTestCase):
     """v0.5.0 六档处置的 P1 墓碑 + P0 物理删除审批。"""
 

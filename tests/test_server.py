@@ -144,6 +144,49 @@ class ServerReadWriteTests(ServerTestCase):
         self.assertEqual(len(listing["items"]), 1)
         self.assertEqual(listing["items"][0]["object"], "白茶")
 
+    def test_stats_endpoint(self) -> None:
+        self.request(
+            "POST",
+            "/consolidate",
+            {"peer_id": "u1", "messages": [{"role": "user", "content": "我喜欢白茶。"}]},
+        )
+        status, stats = self.request("GET", "/stats?peer_id=u1")
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(stats["total_memories"], 1)
+        self.assertIn("archive_ratio", stats)
+        self.assertIn("tiers", stats["semantic"])
+
+    def test_forget_tombstone_and_hard_delete_approval(self) -> None:
+        self.request(
+            "POST",
+            "/consolidate",
+            {"peer_id": "u1", "messages": [{"role": "user", "content": "我喜欢白茶。"}]},
+        )
+        _, listing = self.request("GET", "/list?peer_id=u1&kind=semantic")
+        memory_id = listing["items"][0]["id"]
+
+        # 默认 P1 墓碑
+        status, result = self.request("POST", "/forget", {"peer_id": "u1", "memory_id": memory_id})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["operation"], "tombstone")
+
+        # hard 未审批 → 403
+        status, _ = self.request(
+            "POST", "/forget", {"peer_id": "u1", "memory_id": memory_id, "hard": True}
+        )
+        self.assertEqual(status, 403)
+
+        # hard + approved → 物理删除
+        status, result = self.request(
+            "POST",
+            "/forget",
+            {"peer_id": "u1", "memory_id": memory_id, "hard": True, "approved": True},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["operation"], "hard_delete")
+        _, listing = self.request("GET", "/list?peer_id=u1&kind=semantic")
+        self.assertEqual(listing["items"], [])
+
 
 class ServerReadOnlyTests(ServerTestCase):
     def setUp(self) -> None:

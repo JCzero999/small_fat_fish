@@ -13,11 +13,18 @@ from .embeddings import (
 )
 from .engine import ExtraBrain
 from .extraction import (
+    ConflictDetection,
     ConversationMessage,
+    EmotionUpdate,
+    EpisodicCandidate,
     ExtractionError,
     ExtractionResult,
     MemoryExtractor,
     OpenAICompatibleExtractor,
+    ProfileChange,
+    SemanticCandidate,
+    StyleCandidate,
+    ThreadChange,
 )
 from .models import (
     ActiveThread,
@@ -34,6 +41,7 @@ from .models import (
     StyleMemory,
     UserSchema,
     UserStableProfile,
+    is_unresolved_episode,
 )
 from .retrieval import Injection, MemoryRetriever, RetrievalResult, ScoredMemory
 from .session import SessionTracker
@@ -41,11 +49,14 @@ from .storage import MemoryStore, WriteBatch
 
 __all__ = [
     "ActiveThread",
+    "ConflictDetection",
     "ConsolidationReport",
     "ConversationMessage",
     "CoreMemory",
     "CoreMemoryLimitError",
     "EmbeddingProvider",
+    "EmotionUpdate",
+    "EpisodicCandidate",
     "EpisodicMemory",
     "ExtraBrain",
     "ExtractionError",
@@ -64,13 +75,17 @@ __all__ = [
     "NarrativeLayer",
     "OpenAICompatibleEmbedder",
     "OpenAICompatibleExtractor",
+    "ProfileChange",
     "ProactiveConfig",
     "RelationshipModel",
     "RetrievalResult",
     "ScoredMemory",
+    "SemanticCandidate",
     "SemanticMemory",
     "SessionTracker",
+    "StyleCandidate",
     "StyleMemory",
+    "ThreadChange",
     "UserSchema",
     "UserStableProfile",
     "VectorEntry",
@@ -79,6 +94,7 @@ __all__ = [
     "build_vector_index",
     "calculate_decay",
     "cosine_similarity",
+    "is_unresolved_episode",
 ]
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
