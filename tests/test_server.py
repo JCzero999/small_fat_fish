@@ -188,6 +188,48 @@ class ServerReadWriteTests(ServerTestCase):
         self.assertEqual(listing["items"], [])
 
 
+class ServerProactiveTests(ServerTestCase):
+    def setUp(self) -> None:
+        self.start(FakeExtractor(_fact()))
+
+    def tearDown(self) -> None:
+        self.stop()
+
+    def test_proactive_ensure_and_status(self) -> None:
+        # 未建立配置时默认不开口
+        status, result = self.request("POST", "/proactive", {"peer_id": "u1", "local_hour": 14})
+        self.assertEqual(status, 200)
+        self.assertFalse(result["should"])
+        # ensure 建配置
+        status, result = self.request("POST", "/proactive", {"peer_id": "u1", "ensure": True, "local_hour": 14})
+        self.assertEqual(status, 200)
+        self.assertTrue(result["should"], result.get("reason"))
+        self.assertIn("prompt", result)
+
+    def test_proactive_quiet_hours_via_local_hour(self) -> None:
+        self.request("POST", "/proactive", {"peer_id": "u1", "ensure": True})
+        status, result = self.request("POST", "/proactive", {"peer_id": "u1", "local_hour": 23})
+        self.assertEqual(status, 200)
+        self.assertFalse(result["should"])
+        self.assertEqual(result["reason"], "quiet_hours")
+
+    def test_proactive_record(self) -> None:
+        self.request("POST", "/proactive", {"peer_id": "u1", "ensure": True})
+        status, result = self.request(
+            "POST", "/proactive_record", {"peer_id": "u1", "umo": "aiocqhttp:FriendMessage:123"}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(result["recorded"])
+        # 记录后：min_interval 挡住
+        status, result = self.request("POST", "/proactive", {"peer_id": "u1", "local_hour": 14})
+        self.assertFalse(result["should"])
+        self.assertEqual(result["reason"], "min_interval_not_reached")
+
+    def test_proactive_invalid_local_hour(self) -> None:
+        status, _ = self.request("POST", "/proactive", {"peer_id": "u1", "local_hour": 99})
+        self.assertEqual(status, 400)
+
+
 class ServerReadOnlyTests(ServerTestCase):
     def setUp(self) -> None:
         self.start(None)

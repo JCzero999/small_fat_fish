@@ -525,6 +525,53 @@ class CompanionLayerTests(TempDbTestCase):
             self.assertFalse(should)
             self.assertEqual(reason, "min_interval_not_reached")
 
+    def test_build_proactive_prompt_with_material(self) -> None:
+        """决策放行时：返回可直接喂给模型的由头提示词，含记忆素材。"""
+        with ExtraBrain(self.db_path) as brain:
+            brain.save_proactive_config(
+                self._config(daily_limit=10, silence_threshold_minutes=1,
+                             min_interval_minutes=1)
+            )
+            brain.store.save_semantic(make_semantic("sem_pa", object="面试", importance=0.8))
+            brain.store.save_episodic(
+                make_episodic("ep_pa", summary="用户在准备重要面试",
+                              emotions=["焦虑"], emotion_state="open", importance=0.9)
+            )
+            brain.reindex()
+            result = brain.build_proactive_prompt(
+                "u1", now=datetime(2026, 11, 1, 15, 0, tzinfo=timezone.utc)
+            )
+            self.assertTrue(result["should"], result["reason"])
+            prompt = result["prompt"]
+            self.assertIn("由头", prompt)
+            self.assertIn("面试", prompt)
+            self.assertIn("情绪还没平复", prompt)  # unresolved episode annotated
+
+    def test_build_proactive_prompt_blocked_reason(self) -> None:
+        with ExtraBrain(self.db_path) as brain:
+            brain.save_proactive_config(self._config())
+            result = brain.build_proactive_prompt(
+                "u1", now=datetime(2026, 11, 1, 23, 0, tzinfo=timezone.utc)
+            )
+            self.assertFalse(result["should"])
+            self.assertEqual(result["reason"], "quiet_hours")
+            self.assertNotIn("prompt", result)
+
+    def test_ensure_proactive_config_creates_default(self) -> None:
+        with ExtraBrain(self.db_path) as brain:
+            config = brain.ensure_proactive_config("brand_new_user")
+            self.assertTrue(config.enabled)
+            again = brain.ensure_proactive_config("brand_new_user")
+            self.assertEqual(config.id, again.id)
+
+    def test_proactive_last_umo_roundtrip(self) -> None:
+        with ExtraBrain(self.db_path) as brain:
+            config = self._config()
+            config.last_umo = "aiocqhttp:FriendMessage:123456"
+            brain.save_proactive_config(config)
+            loaded = brain.get_proactive_config_by_user("u1")
+            self.assertEqual(loaded.last_umo, "aiocqhttp:FriendMessage:123456")
+
 
 class EncryptionTests(TempDbTestCase):
     """v0.5.0 静态加密（口令一致才能解密）。"""

@@ -19,15 +19,18 @@ import asyncio
 import hashlib
 import json
 import os
+import random
 import re
 import sys
 import threading
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger, star
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.message_components import Plain
 from astrbot.api.provider import LLMResponse, ProviderRequest
 
 # GreedyStr：把指令后剩余的全部文本收进一个参数（多词 search / 带 flag 的 forget 需要）。
@@ -185,6 +188,27 @@ class LocalBackend:
     def forget(self, peer_id: str, memory_id: str, *, hard: bool, approved: bool) -> dict:
         return self._brain(peer_id).forget(memory_id, hard=hard, approved=approved)
 
+    def ensure_proactive(self, peer_id: str) -> dict:
+        brain = self._brain(peer_id)
+        brain.ensure_proactive_config(peer_id)
+        return brain.build_proactive_prompt(peer_id)
+
+    def proactive_prompt(
+        self, peer_id: str, now, force: bool = False, local_hour: int | None = None
+    ) -> dict:
+        return self._brain(peer_id).build_proactive_prompt(
+            peer_id, now=now, force=force, local_hour=local_hour
+        )
+
+    def proactive_record(self, peer_id: str, now, umo: str | None = None) -> None:
+        self._brain(peer_id).record_proactive_open(peer_id, now=now, umo=umo)
+
+    def set_proactive_enabled(self, peer_id: str, enabled: bool) -> bool:
+        config = self._brain(peer_id).ensure_proactive_config(peer_id)
+        config.enabled = enabled
+        self._brain(peer_id).save_proactive_config(config)
+        return enabled
+
     def close(self) -> None:
         for brain in self._brains.values():
             try:
@@ -254,6 +278,32 @@ class HttpBackend:
             {"peer_id": peer_id, "memory_id": memory_id, "hard": hard, "approved": approved},
         )
 
+    def ensure_proactive(self, peer_id: str) -> dict:
+        return self._post("/proactive", {"peer_id": peer_id, "ensure": True})
+
+    def proactive_prompt(self, peer_id: str, now, force: bool = False, local_hour: int | None = None) -> dict:
+        from datetime import timezone as _tz
+
+        body: dict[str, Any] = {"peer_id": peer_id, "force": force}
+        if now is not None:
+            body["now"] = now.astimezone(_tz.utc).isoformat()
+        if local_hour is not None:
+            body["local_hour"] = int(local_hour)
+        return self._post("/proactive", body)
+
+    def proactive_record(self, peer_id: str, now, umo: str | None = None) -> None:
+        from datetime import timezone as _tz
+
+        body: dict[str, Any] = {"peer_id": peer_id}
+        if now is not None:
+            body["now"] = now.astimezone(_tz.utc).isoformat()
+        if umo is not None:
+            body["umo"] = umo
+        self._post("/proactive_record", body)
+
+    def set_proactive_enabled(self, peer_id: str, enabled: bool) -> bool:
+        raise NotImplementedError("http 后端暂不支持 enable/disable，请使用 local 后端")
+
     def close(self) -> None:
         return None
 
@@ -270,6 +320,10 @@ class ExtraBrainPlugin(star.Star):
         self._pending: dict[str, list[dict]] = {}  # peer_id -> 待巩固消息
         self._tasks: set = set()
         self._warned_once = False
+        # 主动开口：peer_id -> (最近一次人类消息时间, 最近 umo)，进程重启即重置
+        self._last_human_at: dict[str, datetime] = {}
+        self._last_umo: dict[str, str] = {}
+        self._proactive_task: asyncio.Task | None = None
 
         backend_mode = str(self.config.get("backend", "local"))
         try:
@@ -315,6 +369,106 @@ class ExtraBrainPlugin(star.Star):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    # -- proactive: 主动开口 ------------------------------------------------
+
+    @property
+    def _proactive_enabled(self) -> bool:
+        return bool(self.config.get("proactive_enabled", False))
+
+    @filter.on_astrbot_loaded()
+    async def on_astrbot_loaded(self):
+        if self._proactive_enabled and self.backend is not None:
+            self._proactive_task = asyncio.create_task(self._proactive_loop())
+            logger.info("extra-brain: 主动开口循环已启动")
+
+    def _proactive_config(self) -> dict[str, int]:
+        def _num(key: str, default: int) -> int:
+            try:
+                return max(1, int(self.config.get(key, default)))
+            except (TypeError, ValueError):
+                return default
+        return {
+            "interval": _num("proactive_check_interval_minutes", 20),
+            "chance": max(1, min(100, _num("proactive_chance_percent", 30))),
+            "limit": _num("proactive_daily_limit", 5),
+            "silence": _num("proactive_silence_minutes", 120),
+            "quiet_start": max(0, min(23, _num("proactive_quiet_hours_start", 22))),
+            "quiet_end": max(0, min(23, _num("proactive_quiet_hours_end", 8))),
+        }
+
+    async def _proactive_loop(self) -> None:
+        pcfg = self._proactive_config()
+        while True:
+            try:
+                await asyncio.sleep(pcfg["interval"] * 60)
+                await self._proactive_tick(pcfg)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(f"extra-brain: 主动开口循环异常（下一轮重试）：{exc}")
+
+    async def _proactive_tick(self, pcfg: dict[str, int] | None = None, *, force_peer: str | None = None) -> str:
+        """一次开口尝试：概率骰 → 逐 peer 决策 → 生成台词 → 发送 → 记录。"""
+        pcfg = pcfg or self._proactive_config()
+        backend = self._backend_or_none()
+        if backend is None:
+            return "后端不可用"
+        candidates = [force_peer] if force_peer else list(self._last_umo.keys())
+        if not candidates:
+            return "没有已知 peer（等对方先发过消息才认识）"
+        now = datetime.now().astimezone()
+        skipped: list[str] = []
+        for peer_id in candidates:
+            if not force_peer and random.randint(1, 100) > pcfg["chance"]:
+                skipped.append(f"{peer_id}: 概率骰未中")
+                continue
+            try:
+                decision = await asyncio.to_thread(
+                    backend.proactive_prompt, peer_id, now, False, now.hour
+                )
+            except Exception as exc:
+                skipped.append(f"{peer_id}: 决策失败 {exc}")
+                continue
+            if not decision.get("should"):
+                skipped.append(f"{peer_id}: {decision.get('reason')}")
+                continue
+            prompt_text = decision.get("prompt") or ""
+            umo = self._last_umo.get(peer_id)
+            if not umo:
+                skipped.append(f"{peer_id}: 无回复路由")
+                continue
+            try:
+                provider_id = await self.context.get_current_chat_provider_id(umo)
+                resp = await self.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    prompt=prompt_text,
+                    system_prompt="你在主动开启一段对话，像惦记朋友一样自然提起，只输出要发送的那句话本身。",
+                )
+            except Exception as exc:
+                logger.warning(f"extra-brain: 台词生成失败（peer={peer_id}）：{exc}")
+                continue
+            line = (getattr(resp, "completion_text", "") or "").strip()
+            if not line:
+                skipped.append(f"{peer_id}: 模型未产出台词")
+                continue
+            try:
+                sent = await self.context.send_message(
+                    umo, MessageChain(chain=[Plain(text=line)])
+                )
+            except Exception as exc:
+                logger.warning(f"extra-brain: 发送失败（peer={peer_id}）：{exc}")
+                continue
+            if not sent:
+                skipped.append(f"{peer_id}: 平台不支持主动发送")
+                continue
+            try:
+                await asyncio.to_thread(backend.proactive_record, peer_id, now, umo)
+            except Exception as exc:
+                logger.warning(f"extra-brain: 开口记录失败（peer={peer_id}）：{exc}")
+            logger.info(f"extra-brain: 主动开口 peer={peer_id} 内容={line[:40]}")
+            return f"已向 {peer_id} 主动开口：{line[:60]}"
+        return "本轮未开口（" + "；".join(skipped[:4]) + "）"
+
     # -- hook: 注入 + user 消息捕获 ----------------------------------------
 
     @filter.on_llm_request()
@@ -325,6 +479,10 @@ class ExtraBrainPlugin(star.Star):
         event.set_extra(_INJECT_FLAG, True)
         prompt = (req.prompt or "").strip()
         peer_id = self._peer_of(event)
+
+        # 主动开口依据：记录人类活跃时间与回复路由
+        self._last_human_at[peer_id] = datetime.now().astimezone()
+        self._last_umo[peer_id] = event.unified_msg_origin
 
         # 巩固用的 user 消息无条件捕获（不依赖 inject_enabled）
         if prompt:
@@ -597,9 +755,68 @@ class ExtraBrainPlugin(star.Star):
             f"已{verb}：{memory_id}\n留档摘要：{result.get('digest', '')[:60]}"
         )
 
-    # -- lifecycle --------------------------------------------------------
+    @memory_group.command("proactive")
+    async def memory_proactive(self, event: AstrMessageEvent, action: str = "status"):
+        """主动开口：/memory proactive enable|disable|status|test"""
+        peer_id = self._peer_of(event)
+        backend = self._backend_or_none()
+        if action in ("enable", "disable"):
+            if backend is None:
+                yield event.plain_result("后端不可用")
+                return
+            want_on = action == "enable"
+            try:
+                enabled = await asyncio.to_thread(
+                    backend.set_proactive_enabled, peer_id, want_on
+                )
+            except NotImplementedError as exc:
+                yield event.plain_result(str(exc))
+                return
+            except Exception as exc:
+                yield event.plain_result(f"设置失败：{exc}")
+                return
+            yield event.plain_result(
+                f"peer {peer_id} 的主动开口记忆配置已{'开启' if enabled else '关闭'}。\n"
+                + ("注意：总开关还需在插件配置 proactive_enabled=true 并重启生效。"
+                   if want_on else "")
+            )
+            return
+        if action == "test":
+            if backend is None:
+                yield event.plain_result("后端不可用")
+                return
+            summary = await self._proactive_tick(force_peer=peer_id)
+            yield event.plain_result(f"主动开口测试：{summary}")
+            return
+        # status
+        pcfg = self._proactive_config()
+        lines = [
+            "主动开口状态",
+            f"总开关（插件配置）：{'开' if self._proactive_enabled else '关'}",
+            f"循环运行中：{'是' if self._proactive_task and not self._proactive_task.done() else '否'}",
+            f"节奏：每 {pcfg['interval']} 分钟检查 · "
+            f"概率 {pcfg['chance']}% · "
+            f"每日 ≤{pcfg['limit']} 次 · "
+            f"静默 ≥{pcfg['silence']} 分钟",
+            f"安静时段：{pcfg['quiet_start']}:00 – {pcfg['quiet_end']}:00",
+        ]
+        if backend is not None:
+            try:
+                now = datetime.now().astimezone()
+                decision = await asyncio.to_thread(
+                    backend.proactive_prompt, peer_id, None, False, now.hour
+                )
+                if decision.get("should"):
+                    lines.append(f"当前判定：可以开口（由头 {decision.get('reason')}）")
+                else:
+                    lines.append(f"当前判定：暂不开口，原因：{decision.get('reason')}")
+            except Exception as exc:
+                lines.append(f"当前判定：读取失败 {exc}")
+        yield event.plain_result("\n".join(lines))
 
     async def terminate(self) -> None:
+        if self._proactive_task is not None:
+            self._proactive_task.cancel()
         for task in list(self._tasks):
             task.cancel()
         if self.backend is not None:

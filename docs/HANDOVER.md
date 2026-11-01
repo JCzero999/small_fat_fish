@@ -172,12 +172,12 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 1. ~~**emotion_state 接进抽取链路**~~ ✅ 已落地：抽取 prompt 输出 `emotion_state`（新事件默认 open）与 `emotion_updates`（推进已有情节）；巩固侧状态机校验迁移（非法转换拒绝并记警告）；反漠视规则生效——未平复事件（open/acknowledged/attended 且带情绪）保底温层、永不自动归档、检索加权 +0.10 并豁免分数门槛。77 项单测覆盖。
 2. ~~**`/memory status` 展示保留度档位分布**~~ ✅ 已落地：`/memory stats`（档位分布/归档比例/库体积）；`/memory forget <id>`（P1 墓碑默认；P0 物理删除需 `--hard --yes` 双确认，适配器不会自动批准）。
-3. **主动开口定时器接线** 🔜：`should_proactive_open` 决策 API 已就绪，需要在 AstrBot 适配器注册 cron（AstrBot 有定时体系），拿「由头」交给模型生成开场白。
+3. ~~**主动开口定时器接线**~~ ✅ 已落地（v0.6.0 续）：适配器 `on_astrbot_loaded` 起 asyncio 循环，按「检查间隔 + 概率骰 + 每日上限 + 静默阈值 + 安静时段」调库 `build_proactive_prompt` 拿由头与素材，用 `context.llm_generate` 生成台词、`context.send_message(umo, ...)` 投递（回复路由来自最近人类消息的 umo，并持久化进 `ProactiveConfig.last_umo`）。指令：`/memory proactive status|enable|disable|test`。配置见插件面板 `proactive_*`（总开关 `proactive_enabled` 需重启）。
 4. **工作记忆启动效应** 🔜：`working_set` 内实体下一轮检索加权（v0.2.1 遗留）。
 5. **情感记忆保护 flags.bit6 / 多角度视角** 🔜：\|效价\|≥0.45 或唤起≥0.65 的记忆跳过情绪衰减、最多降到温层；fact/feeling/bond/story 四视角打标（v0.4.0 遗留）。
 6. **群聊场景实测**：把机器人拉进群（peer 已按群号隔离；群聊需 @机器人 或 `/` 前缀唤醒）；观察群聊多人共享记忆库的行为是否符合预期。
 7. **每日定时巩固窗口**（规范 §5.1 第三触发）：适配器注册每日任务调 consolidate。
-8. **持久化运行**：AstrBot/NapCat 都挂在后台 job 里，重启机器后需手动按 §4 拉起；可做成计划任务/NSSM 服务。
+8. ~~**持久化运行**~~ ✅ 已落地（本机策略禁计划任务 → Startup 回退）：`scripts/install-autostart.ps1` 注册开机自启 + 5 分钟看门狗（先试 Scheduled Task，被 `Access denied` 挡住则回退到用户 Startup 文件夹放无窗口 VBS 启动器跑 `watchdog.ps1`）；`start-silent.ps1` 幂等拉起 AstrBot+NapCat（端口在监听就跳过），API Key 从 User 环境变量读取（`install-autostart.ps1 -ApiKey` 持久化一次）。卸载：`scripts/uninstall-autostart.ps1`。QQ 登录会话若过期需重新扫码，跑可见的 `start-all.ps1` 一次。
 9. 可选：真实 tokenizer 预算、`http` 后端多宿主共享部署、embedding 服务地址配置进 AstrBot 面板。
 10. 搁置：DSH 插件加载修复（等有需要再按坑 4 方案修）。
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -21,7 +22,11 @@ from .models import (
     NarrativeLayer,
     ProactiveConfig,
     RelationshipModel,
+    SemanticMemory,
+    EpisodicMemory,
     UserSchema,
+    is_unresolved_episode,
+    new_memory_id,
     parse_iso8601,
     to_iso8601,
     utc_now,
@@ -253,7 +258,7 @@ class ExtraBrain:
         return self.store.list_proactive_configs()
 
     def should_proactive_open(
-        self, user_id: str, now: datetime | None = None
+        self, user_id: str, now: datetime | None = None, *, local_hour: int | None = None
     ) -> tuple[bool, str]:
         """v0.4.0 主动开口决策：是否应该主动向用户开口。
 
@@ -264,6 +269,9 @@ class ExtraBrain:
         4. 距离上次开口未达最小间隔 → 不开口
         5. 静默未达阈值 → 不开口
         6. 否则 → 可开口，reason 说明由头
+
+        ``local_hour``（0-23）显式指定用户本地小时——跨时区宿主用它覆盖
+        墙钟判断，保证安静时段检查按用户当地时间执行。
         """
         now = now or utc_now()
         config = self.get_proactive_config_by_user(user_id)
@@ -271,7 +279,10 @@ class ExtraBrain:
             return False, "proactive_not_configured_or_disabled"
 
         # 安静时段检查
-        hour = now.hour
+        if local_hour is not None and 0 <= int(local_hour) <= 23:
+            hour = int(local_hour)
+        else:
+            hour = now.hour
         if config.quiet_hours_start > config.quiet_hours_end:
             # 跨午夜，如 22~8
             if hour >= config.quiet_hours_start or hour < config.quiet_hours_end:
@@ -307,8 +318,10 @@ class ExtraBrain:
 
         return True, "eligible_for_proactive_open"
 
-    def record_proactive_open(self, user_id: str, now: datetime | None = None) -> None:
-        """记录一次主动开口，更新计数和时间戳。"""
+    def record_proactive_open(
+        self, user_id: str, now: datetime | None = None, *, umo: str | None = None
+    ) -> None:
+        """记录一次主动开口，更新计数和时间戳；umo 存回复路由供下次投递。"""
         now = now or utc_now()
         config = self.get_proactive_config_by_user(user_id)
         if config is None:
@@ -319,7 +332,79 @@ class ExtraBrain:
             config.daily_reset_date = today
         config.daily_count += 1
         config.last_proactive_at = to_iso8601(now)
+        if umo is not None:
+            config.last_umo = umo
         self.save_proactive_config(config)
+
+    def ensure_proactive_config(self, user_id: str) -> ProactiveConfig:
+        """没有配置就按默认值建一份（宿主启用主动开口时的引导调用）。"""
+        existing = self.get_proactive_config_by_user(user_id)
+        if existing is not None:
+            return existing
+        config = ProactiveConfig(id=new_memory_id("pa"), user_id=user_id)
+        self.save_proactive_config(config)
+        return config
+
+    def build_proactive_prompt(
+        self,
+        user_id: str,
+        now: datetime | None = None,
+        *,
+        force: bool = False,
+        local_hour: int | None = None,
+    ) -> dict[str, Any]:
+        """一步到位：决策 + 由头 + 检索记忆 → 交给宿主模型的开场提示词。
+
+        返回 ``{"should": bool, "reason": str, "user_id": ...}``；
+        ``should=True`` 时附带 ``prompt``（台词由模型自己说，库只给由头与素材）。
+        ``force=True`` 跳过闸门直接给提示词（宿主测试指令用，仍照常记录）。
+        只读安全：内部用 retrieve()，不写激活计数。
+        注意：``now`` 应传宿主本地时区的 aware datetime（安静时段按本地小时判断）。
+        """
+        now = now or utc_now()
+        if now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        should, reason = self.should_proactive_open(user_id, now=now, local_hour=local_hour)
+        if force:
+            should, reason = True, "forced_test"
+        base: dict[str, Any] = {"should": should, "reason": reason, "user_id": user_id}
+        if not should:
+            return base
+
+        angle = random.choice(
+            (
+                "最近有什么让用户放不下的小事",
+                "我们上次聊到哪里",
+                "用户可能正在经历什么",
+                "有什么值得惦记的日常",
+            )
+        )
+        retrieved = self.retrieve(angle, now=now)
+        blocks: list[str] = []
+        for item in retrieved.semantic[:3]:
+            memory = item.memory
+            assert isinstance(memory, SemanticMemory)
+            blocks.append(f"- {memory.subject} {memory.predicate} {memory.object}")
+        for item in retrieved.episodic[:2]:
+            memory = item.memory
+            assert isinstance(memory, EpisodicMemory)
+            marker = "（情绪还没平复，优先惦记）" if is_unresolved_episode(memory) else ""
+            blocks.append(f"- {memory.timestamp[:10]} {memory.summary}{marker}")
+
+        threads = self.core.active_threads[-2:]
+        thread_text = "；".join(thread.summary for thread in threads) or "（无）"
+        memory_text = "\n".join(blocks) or "（无特定素材，关心一下近况即可）"
+
+        base["prompt"] = (
+            "你要主动开启一段对话，像朋友一样自然地提起，不要解释你在做什么、"
+            "不要提到记忆或系统。\n"
+            f"由头：{reason}\n"
+            f"当前正在进行的事：{thread_text}\n"
+            f"可以参考的记忆（可选其一，也可以都不用）：\n{memory_text}\n"
+            "要求：一句话，不超过40字，口语化、温暖、符合你的人设语气，"
+            "不要用 Markdown、不要连续追问。"
+        )
+        return base
 
     def close(self) -> None:
         self.store.close()

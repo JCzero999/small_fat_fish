@@ -906,6 +906,7 @@ class ProactiveConfig:
     last_proactive_at: str | None = None
     daily_count: int = 0
     daily_reset_date: str | None = None
+    last_umo: str | None = None  # 宿主会话路由（主动开口的发送目标），由适配器更新
     created_at: str | None = None
 
     def __post_init__(self) -> None:
@@ -938,6 +939,8 @@ class ProactiveConfig:
             self.daily_reset_date = _string(
                 self.daily_reset_date, "proactive.daily_reset_date"
             )
+        if self.last_umo is not None:
+            self.last_umo = _string(self.last_umo, "proactive.last_umo")
         if self.created_at is not None:
             self.created_at = _datetime_field(
                 self.created_at, "proactive.created_at"
@@ -958,6 +961,7 @@ class ProactiveConfig:
             last_proactive_at=data.get("last_proactive_at"),
             daily_count=data.get("daily_count", 0),
             daily_reset_date=data.get("daily_reset_date"),
+            last_umo=data.get("last_umo"),
             created_at=data.get("created_at"),
         )
 
@@ -974,6 +978,7 @@ class ProactiveConfig:
             "last_proactive_at": self.last_proactive_at,
             "daily_count": self.daily_count,
             "daily_reset_date": self.daily_reset_date,
+            "last_umo": self.last_umo,
             "created_at": self.created_at,
         }
 

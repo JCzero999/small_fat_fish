@@ -54,5 +54,47 @@
         "description": "注入 token 预算上限（0 = 使用记忆库默认 1800）",
         "default": 0,
         "hint": "含完整 Core Memory 与检索到的语义/情节记忆"
+    },
+    "proactive_enabled": {
+        "type": "bool",
+        "description": "主动开口总开关（需重启生效；个体开关用 /memory proactive enable）",
+        "default": false,
+        "hint": "开启后按下方节奏在静默时段外概率性主动发消息；先用 /memory proactive test 验证"
+    },
+    "proactive_check_interval_minutes": {
+        "type": "int",
+        "description": "主动开口检查间隔（分钟）",
+        "default": 20,
+        "hint": "每隔多久骰一次概率"
+    },
+    "proactive_chance_percent": {
+        "type": "int",
+        "description": "每轮检查的开口概率（%）",
+        "default": 30,
+        "hint": "配合检查间隔与每日上限共同限频"
+    },
+    "proactive_daily_limit": {
+        "type": "int",
+        "description": "每日主动开口上限（次）",
+        "default": 5,
+        "hint": "按天重置"
+    },
+    "proactive_silence_minutes": {
+        "type": "int",
+        "description": "静默阈值（分钟）：距上次联系超过才允许开口",
+        "default": 120,
+        "hint": "对方刚聊完不会立刻再打扰"
+    },
+    "proactive_quiet_hours_start": {
+        "type": "int",
+        "description": "安静时段开始小时（0-23，本地时间）",
+        "default": 22,
+        "hint": "深夜不打扰"
+    },
+    "proactive_quiet_hours_end": {
+        "type": "int",
+        "description": "安静时段结束小时（0-23，本地时间）",
+        "default": 8,
+        "hint": "与开始小时构成跨午夜的禁开口区间"
     }
 }

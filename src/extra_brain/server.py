@@ -121,6 +121,12 @@ class ExtraBrainServer:
         if method == "POST" and route == "/forget":
             return self._forget(body)
 
+        if method == "POST" and route == "/proactive":
+            return self._proactive(body)
+
+        if method == "POST" and route == "/proactive_record":
+            return self._proactive_record(body)
+
         raise _HttpError(HTTPStatus.NOT_FOUND, f"unknown route {method} {route}")
 
     def _inject(self, body: Mapping[str, Any]) -> dict[str, Any]:
@@ -190,6 +196,51 @@ class ExtraBrainServer:
                 raise _HttpError(HTTPStatus.FORBIDDEN, str(exc)) from exc
         result["peer_id"] = peer_id
         return result
+
+    def _proactive(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        peer_id = _peer(body)
+        force = bool(body.get("force", False))
+        ensure = bool(body.get("ensure", False))
+        local_hour = body.get("local_hour")
+        if local_hour is not None:
+            try:
+                local_hour = int(local_hour)
+            except (TypeError, ValueError):
+                raise _HttpError(HTTPStatus.BAD_REQUEST, "local_hour must be an int 0-23") from None
+            if not 0 <= local_hour <= 23:
+                raise _HttpError(HTTPStatus.BAD_REQUEST, "local_hour must be 0-23")
+        now = _parse_now(body.get("now"))
+        with self._lock:
+            brain = self._brain(peer_id)
+            if not hasattr(brain, "build_proactive_prompt"):
+                raise _HttpError(
+                    HTTPStatus.NOT_IMPLEMENTED,
+                    "memory library too old for proactive endpoints; upgrade extra_brain",
+                )
+            if ensure:
+                if self.read_only:
+                    raise _HttpError(HTTPStatus.SERVICE_UNAVAILABLE, "read-only mode")
+                brain.ensure_proactive_config(peer_id)
+            result = brain.build_proactive_prompt(
+                peer_id, now=now, force=force, local_hour=local_hour
+            )
+        result["peer_id"] = peer_id
+        return result
+
+    def _proactive_record(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        peer_id = _peer(body)
+        now = _parse_now(body.get("now"))
+        umo = body.get("umo")
+        if umo is not None:
+            umo = _string(umo, "umo")
+        with self._lock:
+            brain = self._brain(peer_id)
+            if not hasattr(brain, "record_proactive_open"):
+                raise _HttpError(HTTPStatus.NOT_IMPLEMENTED, "memory library too old")
+            if self.read_only:
+                raise _HttpError(HTTPStatus.SERVICE_UNAVAILABLE, "read-only mode")
+            brain.record_proactive_open(peer_id, now=now, umo=umo)
+        return {"peer_id": peer_id, "recorded": True}
 
     def _list(self, peer_id: str, kind: str) -> dict[str, Any]:
         with self._lock:
