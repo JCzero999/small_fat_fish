@@ -95,6 +95,83 @@ class MemoryStore:
                     data TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS relationship_models (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    relationship_type TEXT NOT NULL,
+                    closeness REAL NOT NULL,
+                    trust REAL NOT NULL,
+                    familiarity REAL NOT NULL,
+                    last_updated TEXT NOT NULL,
+                    interaction_count INTEGER NOT NULL,
+                    positive_interactions INTEGER NOT NULL,
+                    negative_interactions INTEGER NOT NULL,
+                    notes TEXT NOT NULL,
+                    created_at TEXT,
+                    data TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_relationship_user
+                    ON relationship_models(user_id);
+
+                CREATE TABLE IF NOT EXISTS user_schemas (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    schema_type TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    last_updated TEXT NOT NULL,
+                    observation_count INTEGER NOT NULL,
+                    created_at TEXT,
+                    data TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_schema_user
+                    ON user_schemas(user_id);
+
+                CREATE TABLE IF NOT EXISTS narrative_layers (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    phase TEXT NOT NULL,
+                    theme TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    last_updated TEXT NOT NULL,
+                    created_at TEXT,
+                    data TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_narrative_user
+                    ON narrative_layers(user_id);
+
+                CREATE TABLE IF NOT EXISTS memory_associations (
+                    id TEXT PRIMARY KEY,
+                    source_memory_id TEXT NOT NULL,
+                    target_memory_id TEXT NOT NULL,
+                    strength REAL NOT NULL,
+                    co_activation_count INTEGER NOT NULL,
+                    last_co_activated TEXT,
+                    created_at TEXT,
+                    data TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_association_source
+                    ON memory_associations(source_memory_id);
+                CREATE INDEX IF NOT EXISTS idx_association_target
+                    ON memory_associations(target_memory_id);
+
+                CREATE TABLE IF NOT EXISTS proactive_configs (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    min_interval_minutes INTEGER NOT NULL,
+                    daily_limit INTEGER NOT NULL,
+                    silence_threshold_minutes INTEGER NOT NULL,
+                    quiet_hours_start INTEGER NOT NULL,
+                    quiet_hours_end INTEGER NOT NULL,
+                    last_proactive_at TEXT,
+                    daily_count INTEGER NOT NULL,
+                    daily_reset_date TEXT,
+                    created_at TEXT,
+                    data TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_proactive_user
+                    ON proactive_configs(user_id);
+
                 CREATE TABLE IF NOT EXISTS memory_vectors (
                     memory_id TEXT PRIMARY KEY,
                     memory_type TEXT NOT NULL,
@@ -170,6 +247,379 @@ class MemoryStore:
 
     def save_style(self, memory: StyleMemory) -> None:
         self.apply_batch(WriteBatch(style=[memory], operation="style.write"))
+
+    # --- v0.4.0 陪伴层数据模型存储 ---
+
+    def save_relationship(self, model: RelationshipModel) -> None:
+        self.apply_batch(
+            WriteBatch(
+                operation="relationship.write",
+                transaction_id=uuid4().hex,
+                audit_details={"model": model.to_dict()},
+            )
+        )
+        with self._lock, self._connection:
+            data = _to_json(model.to_dict())
+            before = self._connection.execute(
+                "SELECT data FROM relationship_models WHERE id = ?", (model.id,)
+            ).fetchone()
+            self._connection.execute(
+                """
+                INSERT INTO relationship_models(
+                    id, user_id, relationship_type, closeness, trust, familiarity,
+                    last_updated, interaction_count, positive_interactions,
+                    negative_interactions, notes, created_at, data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    relationship_type = excluded.relationship_type,
+                    closeness = excluded.closeness,
+                    trust = excluded.trust,
+                    familiarity = excluded.familiarity,
+                    last_updated = excluded.last_updated,
+                    interaction_count = excluded.interaction_count,
+                    positive_interactions = excluded.positive_interactions,
+                    negative_interactions = excluded.negative_interactions,
+                    notes = excluded.notes,
+                    created_at = excluded.created_at,
+                    data = excluded.data
+                """,
+                (
+                    model.id,
+                    model.user_id,
+                    model.relationship_type,
+                    model.closeness,
+                    model.trust,
+                    model.familiarity,
+                    model.last_updated,
+                    model.interaction_count,
+                    model.positive_interactions,
+                    model.negative_interactions,
+                    model.notes,
+                    model.created_at,
+                    data,
+                ),
+            )
+            self._audit(
+                WriteBatch(operation="relationship.write", transaction_id=uuid4().hex),
+                "relationship",
+                model.id,
+                before["data"] if before else None,
+                data,
+            )
+
+    def get_relationship(self, model_id: str) -> RelationshipModel | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM relationship_models WHERE id = ?", (model_id,)
+            ).fetchone()
+        return RelationshipModel.from_dict(json.loads(row["data"])) if row else None
+
+    def get_relationship_by_user(self, user_id: str) -> RelationshipModel | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM relationship_models WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        return RelationshipModel.from_dict(json.loads(row["data"])) if row else None
+
+    def list_relationships(self) -> list[RelationshipModel]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT data FROM relationship_models ORDER BY id"
+            ).fetchall()
+        return [RelationshipModel.from_dict(json.loads(row["data"])) for row in rows]
+
+    def save_user_schema(self, schema: UserSchema) -> None:
+        self.apply_batch(
+            WriteBatch(
+                operation="user_schema.write",
+                transaction_id=uuid4().hex,
+                audit_details={"schema": schema.to_dict()},
+            )
+        )
+        with self._lock, self._connection:
+            data = _to_json(schema.to_dict())
+            before = self._connection.execute(
+                "SELECT data FROM user_schemas WHERE id = ?", (schema.id,)
+            ).fetchone()
+            self._connection.execute(
+                """
+                INSERT INTO user_schemas(
+                    id, user_id, schema_type, traits, emotional_patterns,
+                    preferred_topics, avoided_topics, confidence,
+                    last_updated, observation_count, created_at, data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    schema_type = excluded.schema_type,
+                    traits = excluded.traits,
+                    emotional_patterns = excluded.emotional_patterns,
+                    preferred_topics = excluded.preferred_topics,
+                    avoided_topics = excluded.avoided_topics,
+                    confidence = excluded.confidence,
+                    last_updated = excluded.last_updated,
+                    observation_count = excluded.observation_count,
+                    created_at = excluded.created_at,
+                    data = excluded.data
+                """,
+                (
+                    schema.id,
+                    schema.user_id,
+                    schema.schema_type,
+                    json.dumps(schema.traits, ensure_ascii=False),
+                    json.dumps(schema.emotional_patterns, ensure_ascii=False),
+                    json.dumps(schema.preferred_topics, ensure_ascii=False),
+                    json.dumps(schema.avoided_topics, ensure_ascii=False),
+                    schema.confidence,
+                    schema.last_updated,
+                    schema.observation_count,
+                    schema.created_at,
+                    data,
+                ),
+            )
+            self._audit(
+                WriteBatch(operation="user_schema.write", transaction_id=uuid4().hex),
+                "user_schema",
+                schema.id,
+                before["data"] if before else None,
+                data,
+            )
+
+    def get_user_schema(self, schema_id: str) -> UserSchema | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM user_schemas WHERE id = ?", (schema_id,)
+            ).fetchone()
+        return UserSchema.from_dict(json.loads(row["data"])) if row else None
+
+    def get_user_schema_by_user(self, user_id: str) -> UserSchema | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM user_schemas WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        return UserSchema.from_dict(json.loads(row["data"])) if row else None
+
+    def list_user_schemas(self) -> list[UserSchema]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT data FROM user_schemas ORDER BY id"
+            ).fetchall()
+        return [UserSchema.from_dict(json.loads(row["data"])) for row in rows]
+
+    def save_narrative(self, narrative: NarrativeLayer) -> None:
+        self.apply_batch(
+            WriteBatch(
+                operation="narrative.write",
+                transaction_id=uuid4().hex,
+                audit_details={"narrative": narrative.to_dict()},
+            )
+        )
+        with self._lock, self._connection:
+            data = _to_json(narrative.to_dict())
+            before = self._connection.execute(
+                "SELECT data FROM narrative_layers WHERE id = ?", (narrative.id,)
+            ).fetchone()
+            self._connection.execute(
+                """
+                INSERT INTO narrative_layers(
+                    id, user_id, phase, theme, event_ids, summary,
+                    last_updated, created_at, data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    phase = excluded.phase,
+                    theme = excluded.theme,
+                    event_ids = excluded.event_ids,
+                    summary = excluded.summary,
+                    last_updated = excluded.last_updated,
+                    created_at = excluded.created_at,
+                    data = excluded.data
+                """,
+                (
+                    narrative.id,
+                    narrative.user_id,
+                    narrative.phase,
+                    narrative.theme,
+                    json.dumps(narrative.event_ids, ensure_ascii=False),
+                    narrative.summary,
+                    narrative.last_updated,
+                    narrative.created_at,
+                    data,
+                ),
+            )
+            self._audit(
+                WriteBatch(operation="narrative.write", transaction_id=uuid4().hex),
+                "narrative",
+                narrative.id,
+                before["data"] if before else None,
+                data,
+            )
+
+    def get_narrative(self, narrative_id: str) -> NarrativeLayer | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM narrative_layers WHERE id = ?", (narrative_id,)
+            ).fetchone()
+        return NarrativeLayer.from_dict(json.loads(row["data"])) if row else None
+
+    def get_narrative_by_user(self, user_id: str) -> NarrativeLayer | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM narrative_layers WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        return NarrativeLayer.from_dict(json.loads(row["data"])) if row else None
+
+    def list_narratives(self) -> list[NarrativeLayer]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT data FROM narrative_layers ORDER BY id"
+            ).fetchall()
+        return [NarrativeLayer.from_dict(json.loads(row["data"])) for row in rows]
+
+    def save_association(self, association: MemoryAssociation) -> None:
+        self.apply_batch(
+            WriteBatch(
+                operation="association.write",
+                transaction_id=uuid4().hex,
+                audit_details={"association": association.to_dict()},
+            )
+        )
+        with self._lock, self._connection:
+            data = _to_json(association.to_dict())
+            before = self._connection.execute(
+                "SELECT data FROM memory_associations WHERE id = ?", (association.id,)
+            ).fetchone()
+            self._connection.execute(
+                """
+                INSERT INTO memory_associations(
+                    id, source_memory_id, target_memory_id, strength,
+                    co_activation_count, last_co_activated, created_at, data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    source_memory_id = excluded.source_memory_id,
+                    target_memory_id = excluded.target_memory_id,
+                    strength = excluded.strength,
+                    co_activation_count = excluded.co_activation_count,
+                    last_co_activated = excluded.last_co_activated,
+                    created_at = excluded.created_at,
+                    data = excluded.data
+                """,
+                (
+                    association.id,
+                    association.source_memory_id,
+                    association.target_memory_id,
+                    association.strength,
+                    association.co_activation_count,
+                    association.last_co_activated,
+                    association.created_at,
+                    data,
+                ),
+            )
+            self._audit(
+                WriteBatch(operation="association.write", transaction_id=uuid4().hex),
+                "association",
+                association.id,
+                before["data"] if before else None,
+                data,
+            )
+
+    def get_association(self, association_id: str) -> MemoryAssociation | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM memory_associations WHERE id = ?", (association_id,)
+            ).fetchone()
+        return MemoryAssociation.from_dict(json.loads(row["data"])) if row else None
+
+    def list_associations_for_memory(self, memory_id: str) -> list[MemoryAssociation]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT data FROM memory_associations
+                WHERE source_memory_id = ? OR target_memory_id = ?
+                ORDER BY strength DESC
+                """,
+                (memory_id, memory_id),
+            ).fetchall()
+        return [MemoryAssociation.from_dict(json.loads(row["data"])) for row in rows]
+
+    def save_proactive_config(self, config: ProactiveConfig) -> None:
+        self.apply_batch(
+            WriteBatch(
+                operation="proactive.write",
+                transaction_id=uuid4().hex,
+                audit_details={"config": config.to_dict()},
+            )
+        )
+        with self._lock, self._connection:
+            data = _to_json(config.to_dict())
+            before = self._connection.execute(
+                "SELECT data FROM proactive_configs WHERE id = ?", (config.id,)
+            ).fetchone()
+            self._connection.execute(
+                """
+                INSERT INTO proactive_configs(
+                    id, user_id, enabled, min_interval_minutes, daily_limit,
+                    silence_threshold_minutes, quiet_hours_start, quiet_hours_end,
+                    last_proactive_at, daily_count, daily_reset_date, created_at, data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    enabled = excluded.enabled,
+                    min_interval_minutes = excluded.min_interval_minutes,
+                    daily_limit = excluded.daily_limit,
+                    silence_threshold_minutes = excluded.silence_threshold_minutes,
+                    quiet_hours_start = excluded.quiet_hours_start,
+                    quiet_hours_end = excluded.quiet_hours_end,
+                    last_proactive_at = excluded.last_proactive_at,
+                    daily_count = excluded.daily_count,
+                    daily_reset_date = excluded.daily_reset_date,
+                    created_at = excluded.created_at,
+                    data = excluded.data
+                """,
+                (
+                    config.id,
+                    config.user_id,
+                    int(config.enabled),
+                    config.min_interval_minutes,
+                    config.daily_limit,
+                    config.silence_threshold_minutes,
+                    config.quiet_hours_start,
+                    config.quiet_hours_end,
+                    config.last_proactive_at,
+                    config.daily_count,
+                    config.daily_reset_date,
+                    config.created_at,
+                    data,
+                ),
+            )
+            self._audit(
+                WriteBatch(operation="proactive.write", transaction_id=uuid4().hex),
+                "proactive",
+                config.id,
+                before["data"] if before else None,
+                data,
+            )
+
+    def get_proactive_config(self, config_id: str) -> ProactiveConfig | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM proactive_configs WHERE id = ?", (config_id,)
+            ).fetchone()
+        return ProactiveConfig.from_dict(json.loads(row["data"])) if row else None
+
+    def get_proactive_config_by_user(self, user_id: str) -> ProactiveConfig | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM proactive_configs WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        return ProactiveConfig.from_dict(json.loads(row["data"])) if row else None
+
+    def list_proactive_configs(self) -> list[ProactiveConfig]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT data FROM proactive_configs ORDER BY id"
+            ).fetchall()
+        return [ProactiveConfig.from_dict(json.loads(row["data"])) for row in rows]
 
     def list_semantic(self, *, include_archived: bool = False) -> list[SemanticMemory]:
         query = "SELECT data FROM semantic_memories"

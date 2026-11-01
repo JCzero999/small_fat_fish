@@ -571,3 +571,398 @@ class StyleMemory:
 
 
 Memory = SemanticMemory | EpisodicMemory
+
+
+@dataclass(slots=True)
+class RelationshipModel:
+    """v0.4.0 关系模型（kind=5）：持久化的人际关系状态，重启后恢复。
+
+    慢环不落盘 = 重启就忘，此项修复让关系模型可跨会话持久化。
+    """
+
+    id: str
+    user_id: str
+    relationship_type: str  # 如 "陪伴型", "父女", "朋友", "导师"
+    closeness: float  # 0.0~1.0，亲近度
+    trust: float  # 0.0~1.0，信任度
+    familiarity: float  # 0.0~1.0，熟悉度
+    last_updated: str
+    interaction_count: int = 0
+    positive_interactions: int = 0
+    negative_interactions: int = 0
+    notes: str = ""
+    created_at: str | None = None
+
+    def __post_init__(self) -> None:
+        self.id = _string(self.id, "relationship.id")
+        self.user_id = _string(self.user_id, "relationship.user_id")
+        self.relationship_type = _string(
+            self.relationship_type, "relationship.relationship_type"
+        )
+        self.closeness = _number(self.closeness, "relationship.closeness")
+        self.trust = _number(self.trust, "relationship.trust")
+        self.familiarity = _number(self.familiarity, "relationship.familiarity")
+        self.last_updated = _datetime_field(
+            self.last_updated, "relationship.last_updated"
+        )
+        self.interaction_count = _integer(
+            self.interaction_count, "relationship.interaction_count"
+        )
+        self.positive_interactions = _integer(
+            self.positive_interactions, "relationship.positive_interactions"
+        )
+        self.negative_interactions = _integer(
+            self.negative_interactions, "relationship.negative_interactions"
+        )
+        self.notes = _string(self.notes, "relationship.notes", allow_empty=True)
+        if self.created_at is not None:
+            self.created_at = _datetime_field(
+                self.created_at, "relationship.created_at"
+            )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RelationshipModel:
+        data = _mapping(data, "relationship")
+        return cls(
+            id=data["id"],
+            user_id=data["user_id"],
+            relationship_type=data["relationship_type"],
+            closeness=data["closeness"],
+            trust=data["trust"],
+            familiarity=data["familiarity"],
+            last_updated=data["last_updated"],
+            interaction_count=data.get("interaction_count", 0),
+            positive_interactions=data.get("positive_interactions", 0),
+            negative_interactions=data.get("negative_interactions", 0),
+            notes=data.get("notes", ""),
+            created_at=data.get("created_at"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "relationship_type": self.relationship_type,
+            "closeness": self.closeness,
+            "trust": self.trust,
+            "familiarity": self.familiarity,
+            "last_updated": self.last_updated,
+            "interaction_count": self.interaction_count,
+            "positive_interactions": self.positive_interactions,
+            "negative_interactions": self.negative_interactions,
+            "notes": self.notes,
+            "created_at": self.created_at,
+        }
+
+    @property
+    def estimated_tokens(self) -> int:
+        return estimate_tokens(self.to_dict())
+
+
+@dataclass(slots=True)
+class UserSchema:
+    """v0.4.0 离线用户图式（kind=3）：把散落的情感反应抽象成稳定画像。
+
+    唯一真正的「学习」，把散落的情感反应抽象成「这个人是什么样」。
+    """
+
+    id: str
+    user_id: str
+    schema_type: str  # 如 "情感型", "理性型", "混合型", "内向型", "外向型"
+    traits: list[str]  # 抽象出的稳定特质
+    emotional_patterns: list[str]  # 情感反应模式
+    preferred_topics: list[str]  # 偏好话题
+    avoided_topics: list[str]  # 回避话题
+    confidence: float  # 0.0~1.0，图式置信度
+    last_updated: str
+    observation_count: int = 0
+    created_at: str | None = None
+
+    def __post_init__(self) -> None:
+        self.id = _string(self.id, "user_schema.id")
+        self.user_id = _string(self.user_id, "user_schema.user_id")
+        self.schema_type = _string(self.schema_type, "user_schema.schema_type")
+        self.traits = _string_list(self.traits, "user_schema.traits")
+        self.emotional_patterns = _string_list(
+            self.emotional_patterns, "user_schema.emotional_patterns"
+        )
+        self.preferred_topics = _string_list(
+            self.preferred_topics, "user_schema.preferred_topics"
+        )
+        self.avoided_topics = _string_list(
+            self.avoided_topics, "user_schema.avoided_topics"
+        )
+        self.confidence = _number(self.confidence, "user_schema.confidence")
+        self.last_updated = _datetime_field(
+            self.last_updated, "user_schema.last_updated"
+        )
+        self.observation_count = _integer(
+            self.observation_count, "user_schema.observation_count"
+        )
+        if self.created_at is not None:
+            self.created_at = _datetime_field(
+                self.created_at, "user_schema.created_at"
+            )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> UserSchema:
+        data = _mapping(data, "user_schema")
+        return cls(
+            id=data["id"],
+            user_id=data["user_id"],
+            schema_type=data["schema_type"],
+            traits=data.get("traits", []),
+            emotional_patterns=data.get("emotional_patterns", []),
+            preferred_topics=data.get("preferred_topics", []),
+            avoided_topics=data.get("avoided_topics", []),
+            confidence=data["confidence"],
+            last_updated=data["last_updated"],
+            observation_count=data.get("observation_count", 0),
+            created_at=data.get("created_at"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "schema_type": self.schema_type,
+            "traits": list(self.traits),
+            "emotional_patterns": list(self.emotional_patterns),
+            "preferred_topics": list(self.preferred_topics),
+            "avoided_topics": list(self.avoided_topics),
+            "confidence": self.confidence,
+            "last_updated": self.last_updated,
+            "observation_count": self.observation_count,
+            "created_at": self.created_at,
+        }
+
+    @property
+    def estimated_tokens(self) -> int:
+        return estimate_tokens(self.to_dict())
+
+
+@dataclass(slots=True)
+class NarrativeLayer:
+    """v0.4.0 叙事层（kind=6）：把情感事件串成「我们那段日子」。
+
+    包括亲近期/磨合期/摩擦期等阶段标记，+ 主题 + 事件引用。
+    能回答「我们是什么关系」，而不仅是「他喜欢什么」。
+    """
+
+    id: str
+    user_id: str
+    phase: str  # "亲近期" | "磨合期" | "摩擦期" | "稳定期" | "冷淡期"
+    theme: str  # 叙事主题，如 "共同成长", "克服困难", "日常陪伴"
+    event_ids: list[str]  # 引用的情节记忆 ID
+    summary: str  # 叙事摘要
+    last_updated: str
+    created_at: str | None = None
+
+    def __post_init__(self) -> None:
+        self.id = _string(self.id, "narrative.id")
+        self.user_id = _string(self.user_id, "narrative.user_id")
+        self.phase = _choice(
+            self.phase,
+            "narrative.phase",
+            ("亲近期", "磨合期", "摩擦期", "稳定期", "冷淡期"),
+        )
+        self.theme = _string(self.theme, "narrative.theme")
+        self.event_ids = _string_list(self.event_ids, "narrative.event_ids")
+        self.summary = _string(self.summary, "narrative.summary")
+        self.last_updated = _datetime_field(
+            self.last_updated, "narrative.last_updated"
+        )
+        if self.created_at is not None:
+            self.created_at = _datetime_field(
+                self.created_at, "narrative.created_at"
+            )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> NarrativeLayer:
+        data = _mapping(data, "narrative")
+        return cls(
+            id=data["id"],
+            user_id=data["user_id"],
+            phase=data["phase"],
+            theme=data["theme"],
+            event_ids=data.get("event_ids", []),
+            summary=data["summary"],
+            last_updated=data["last_updated"],
+            created_at=data.get("created_at"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "phase": self.phase,
+            "theme": self.theme,
+            "event_ids": list(self.event_ids),
+            "summary": self.summary,
+            "last_updated": self.last_updated,
+            "created_at": self.created_at,
+        }
+
+    @property
+    def estimated_tokens(self) -> int:
+        return estimate_tokens(self.to_dict())
+
+
+@dataclass(slots=True)
+class MemoryAssociation:
+    """v0.4.0 记忆联想边（ASSOC）：Hebbian 共激活强化。
+
+    同轮被一起想起的记忆之间长 ASSOC 边；/memory associate <id>
+    打印 2 跳联想链。
+    """
+
+    id: str
+    source_memory_id: str
+    target_memory_id: str
+    strength: float  # 0.0~1.0，联想强度
+    co_activation_count: int = 0  # 共同被检索的次数
+    last_co_activated: str | None = None
+    created_at: str | None = None
+
+    def __post_init__(self) -> None:
+        self.id = _string(self.id, "association.id")
+        self.source_memory_id = _string(
+            self.source_memory_id, "association.source_memory_id"
+        )
+        self.target_memory_id = _string(
+            self.target_memory_id, "association.target_memory_id"
+        )
+        self.strength = _number(self.strength, "association.strength")
+        self.co_activation_count = _integer(
+            self.co_activation_count, "association.co_activation_count"
+        )
+        if self.last_co_activated is not None:
+            self.last_co_activated = _datetime_field(
+                self.last_co_activated, "association.last_co_activated"
+            )
+        if self.created_at is not None:
+            self.created_at = _datetime_field(
+                self.created_at, "association.created_at"
+            )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> MemoryAssociation:
+        data = _mapping(data, "association")
+        return cls(
+            id=data["id"],
+            source_memory_id=data["source_memory_id"],
+            target_memory_id=data["target_memory_id"],
+            strength=data["strength"],
+            co_activation_count=data.get("co_activation_count", 0),
+            last_co_activated=data.get("last_co_activated"),
+            created_at=data.get("created_at"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "source_memory_id": self.source_memory_id,
+            "target_memory_id": self.target_memory_id,
+            "strength": self.strength,
+            "co_activation_count": self.co_activation_count,
+            "last_co_activated": self.last_co_activated,
+            "created_at": self.created_at,
+        }
+
+    @property
+    def estimated_tokens(self) -> int:
+        return estimate_tokens(self.to_dict())
+
+
+@dataclass(slots=True)
+class ProactiveConfig:
+    """v0.4.0 主动开口配置：频率/静默/每日上限/由头选择。
+
+    有由头才生成给模型的提示，台词由模型自己说。
+    """
+
+    id: str
+    user_id: str
+    enabled: bool = True
+    min_interval_minutes: int = 60  # 最小开口间隔（分钟）
+    daily_limit: int = 5  # 每日开口上限
+    silence_threshold_minutes: int = 120  # 静默阈值（分钟），超过则可开口
+    quiet_hours_start: int = 22  # 安静时段开始（小时）
+    quiet_hours_end: int = 8  # 安静时段结束（小时）
+    last_proactive_at: str | None = None
+    daily_count: int = 0
+    daily_reset_date: str | None = None
+    created_at: str | None = None
+
+    def __post_init__(self) -> None:
+        self.id = _string(self.id, "proactive.id")
+        self.user_id = _string(self.user_id, "proactive.user_id")
+        self.enabled = _boolean(self.enabled, "proactive.enabled")
+        self.min_interval_minutes = _integer(
+            self.min_interval_minutes, "proactive.min_interval_minutes"
+        )
+        self.daily_limit = _integer(
+            self.daily_limit, "proactive.daily_limit"
+        )
+        self.silence_threshold_minutes = _integer(
+            self.silence_threshold_minutes, "proactive.silence_threshold_minutes"
+        )
+        self.quiet_hours_start = _integer(
+            self.quiet_hours_start, "proactive.quiet_hours_start"
+        )
+        self.quiet_hours_end = _integer(
+            self.quiet_hours_end, "proactive.quiet_hours_end"
+        )
+        self.daily_count = _integer(
+            self.daily_count, "proactive.daily_count"
+        )
+        if self.last_proactive_at is not None:
+            self.last_proactive_at = _datetime_field(
+                self.last_proactive_at, "proactive.last_proactive_at"
+            )
+        if self.daily_reset_date is not None:
+            self.daily_reset_date = _string(
+                self.daily_reset_date, "proactive.daily_reset_date"
+            )
+        if self.created_at is not None:
+            self.created_at = _datetime_field(
+                self.created_at, "proactive.created_at"
+            )
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ProactiveConfig:
+        data = _mapping(data, "proactive")
+        return cls(
+            id=data["id"],
+            user_id=data["user_id"],
+            enabled=data.get("enabled", True),
+            min_interval_minutes=data.get("min_interval_minutes", 60),
+            daily_limit=data.get("daily_limit", 5),
+            silence_threshold_minutes=data.get("silence_threshold_minutes", 120),
+            quiet_hours_start=data.get("quiet_hours_start", 22),
+            quiet_hours_end=data.get("quiet_hours_end", 8),
+            last_proactive_at=data.get("last_proactive_at"),
+            daily_count=data.get("daily_count", 0),
+            daily_reset_date=data.get("daily_reset_date"),
+            created_at=data.get("created_at"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "enabled": self.enabled,
+            "min_interval_minutes": self.min_interval_minutes,
+            "daily_limit": self.daily_limit,
+            "silence_threshold_minutes": self.silence_threshold_minutes,
+            "quiet_hours_start": self.quiet_hours_start,
+            "quiet_hours_end": self.quiet_hours_end,
+            "last_proactive_at": self.last_proactive_at,
+            "daily_count": self.daily_count,
+            "daily_reset_date": self.daily_reset_date,
+            "created_at": self.created_at,
+        }
+
+    @property
+    def estimated_tokens(self) -> int:
+        return estimate_tokens(self.to_dict())

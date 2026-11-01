@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from .config import MemoryConfig
 from .consolidation import ConsolidationReport, Consolidator
@@ -14,7 +14,18 @@ from .extraction import (
     OpenAICompatibleExtractor,
     format_conversation,
 )
-from .models import CoreMemory, utc_now
+from .models import (
+    CoreMemory,
+    MemoryAssociation,
+    Memory,
+    NarrativeLayer,
+    ProactiveConfig,
+    RelationshipModel,
+    UserSchema,
+    parse_iso8601,
+    to_iso8601,
+    utc_now,
+)
 from .retrieval import Injection, MemoryRetriever, RetrievalResult
 from .storage import MemoryStore, WriteBatch
 
@@ -148,6 +159,152 @@ class ExtraBrain:
             WriteBatch(vectors=entries, operation="index.rebuild", audit_details={"count": len(entries)})
         )
         return len(entries)
+
+    # --- v0.4.0 关系模型 ---
+
+    def save_relationship(self, model: RelationshipModel) -> None:
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        self.store.save_relationship(model)
+
+    def get_relationship(self, model_id: str) -> RelationshipModel | None:
+        return self.store.get_relationship(model_id)
+
+    def get_relationship_by_user(self, user_id: str) -> RelationshipModel | None:
+        return self.store.get_relationship_by_user(user_id)
+
+    def list_relationships(self) -> list[RelationshipModel]:
+        return self.store.list_relationships()
+
+    # --- v0.4.0 用户图式 ---
+
+    def save_user_schema(self, schema: UserSchema) -> None:
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        self.store.save_user_schema(schema)
+
+    def get_user_schema(self, schema_id: str) -> UserSchema | None:
+        return self.store.get_user_schema(schema_id)
+
+    def get_user_schema_by_user(self, user_id: str) -> UserSchema | None:
+        return self.store.get_user_schema_by_user(user_id)
+
+    def list_user_schemas(self) -> list[UserSchema]:
+        return self.store.list_user_schemas()
+
+    # --- v0.4.0 叙事层 ---
+
+    def save_narrative(self, narrative: NarrativeLayer) -> None:
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        self.store.save_narrative(narrative)
+
+    def get_narrative(self, narrative_id: str) -> NarrativeLayer | None:
+        return self.store.get_narrative(narrative_id)
+
+    def get_narrative_by_user(self, user_id: str) -> NarrativeLayer | None:
+        return self.store.get_narrative_by_user(user_id)
+
+    def list_narratives(self) -> list[NarrativeLayer]:
+        return self.store.list_narratives()
+
+    # --- v0.4.0 记忆联想 ---
+
+    def save_association(self, association: MemoryAssociation) -> None:
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        self.store.save_association(association)
+
+    def get_association(self, association_id: str) -> MemoryAssociation | None:
+        return self.store.get_association(association_id)
+
+    def list_associations_for_memory(self, memory_id: str) -> list[MemoryAssociation]:
+        return self.store.list_associations_for_memory(memory_id)
+
+    # --- v0.4.0 主动开口 ---
+
+    def save_proactive_config(self, config: ProactiveConfig) -> None:
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        self.store.save_proactive_config(config)
+
+    def get_proactive_config(self, config_id: str) -> ProactiveConfig | None:
+        return self.store.get_proactive_config(config_id)
+
+    def get_proactive_config_by_user(self, user_id: str) -> ProactiveConfig | None:
+        return self.store.get_proactive_config_by_user(user_id)
+
+    def list_proactive_configs(self) -> list[ProactiveConfig]:
+        return self.store.list_proactive_configs()
+
+    def should_proactive_open(
+        self, user_id: str, now: datetime | None = None
+    ) -> tuple[bool, str]:
+        """v0.4.0 主动开口决策：是否应该主动向用户开口。
+
+        返回 (should_open, reason)。规则：
+        1. 未启用 → 不开口
+        2. 安静时段 → 不开口
+        3. 每日已达上限 → 不开口
+        4. 距离上次开口未达最小间隔 → 不开口
+        5. 静默未达阈值 → 不开口
+        6. 否则 → 可开口，reason 说明由头
+        """
+        now = now or utc_now()
+        config = self.get_proactive_config_by_user(user_id)
+        if config is None or not config.enabled:
+            return False, "proactive_not_configured_or_disabled"
+
+        # 安静时段检查
+        hour = now.hour
+        if config.quiet_hours_start > config.quiet_hours_end:
+            # 跨午夜，如 22~8
+            if hour >= config.quiet_hours_start or hour < config.quiet_hours_end:
+                return False, "quiet_hours"
+        else:
+            if config.quiet_hours_start <= hour < config.quiet_hours_end:
+                return False, "quiet_hours"
+
+        # 每日重置
+        today = now.date().isoformat()
+        if config.daily_reset_date != today:
+            config.daily_count = 0
+            config.daily_reset_date = today
+
+        # 每日上限
+        if config.daily_count >= config.daily_limit:
+            return False, "daily_limit_reached"
+
+        # 最小间隔
+        if config.last_proactive_at is not None:
+            last = parse_iso8601(config.last_proactive_at)
+            elapsed_min = (now - last).total_seconds() / 60
+            if elapsed_min < config.min_interval_minutes:
+                return False, "min_interval_not_reached"
+
+        # 静默阈值：如果最近有对话，静默时间不足则不开口
+        # 这里简化：如果 last_proactive_at 存在且静默时间不足，不开口
+        if config.last_proactive_at is not None:
+            last = parse_iso8601(config.last_proactive_at)
+            silence_min = (now - last).total_seconds() / 60
+            if silence_min < config.silence_threshold_minutes:
+                return False, "silence_threshold_not_reached"
+
+        return True, "eligible_for_proactive_open"
+
+    def record_proactive_open(self, user_id: str, now: datetime | None = None) -> None:
+        """记录一次主动开口，更新计数和时间戳。"""
+        now = now or utc_now()
+        config = self.get_proactive_config_by_user(user_id)
+        if config is None:
+            return
+        today = now.date().isoformat()
+        if config.daily_reset_date != today:
+            config.daily_count = 0
+            config.daily_reset_date = today
+        config.daily_count += 1
+        config.last_proactive_at = to_iso8601(now)
+        self.save_proactive_config(config)
 
     def close(self) -> None:
         self.store.close()
