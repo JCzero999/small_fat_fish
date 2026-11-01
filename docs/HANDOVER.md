@@ -35,9 +35,9 @@
 
 | 部分 | 状态 |
 |------|------|
-| Python 记忆库 | ✅ **v0.6.0**：四类记忆 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则）+ 感觉/工作记忆 + 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动）+ HNSW + 静态加密 + P0/P1 遗忘审批。**77 项单测全绿**（3.11/3.12 双版本 CI），真实 DeepSeek + 三天闭环联测通过 |
+| Python 记忆库 | ✅ **v0.6.0**：四类记忆 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批。**88 项单测全绿**（3.11/3.12 双版本 CI），真实 DeepSeek + 三天闭环联测通过 |
 | sidecar（HTTP 服务） | ✅ 已落地并扩展：`/stats`、`/forget`、`--read-only`、加密口令透传 |
-| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 77 项单测 + CLI 冒烟 |
+| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 88 项单测 + CLI 冒烟 |
 | **AstrBot 适配器** | ✅ **已端到端验证**：注入、巩固、peer 跨会话共享、`/memory` 指令、暗号验证通过（2026-10-31） |
 | **QQ 通道（NapCat + OneBot v11）** | ✅ **已端到端验证**：私聊按 QQ 号隔离记忆、`/reset` 后跨上下文答出暗号（2026-11-01） |
 | **v0.5.0 升级回归** | ✅ 2026-11-01：先备份 → 重启 → 旧记忆零丢失（QQ 15 条 + WebChat 1 条）→ 新暗号「金枪鱼-8866」四步验证通过；七因子分档在真实数据生效（高激活 P5 / 新写入 P4） |
@@ -45,7 +45,7 @@
 | DSH 适配器 | ⛔ 插件模块加载失败（根因已定位见坑 4，**已被 AstrBot 路线取代，暂搁置**） |
 | 定时/消息阈值自动巩固 | ✅ 阈值触发已实现（AstrBot 适配器内）；主动开口决策 API 已就绪（`should_proactive_open`），宿主定时器接线 🔜 |
 
-**一句话**：记忆库 v0.6.0（路线规划特性全部落地 + 情感状态机接通、77 测试、CI）→ AstrBot → QQ 全链路跑通；机器人 QQ 号 `1178469499` 常驻本机；旧数据在新代码下零迁移兼容。
+**一句话**：记忆库 v0.6.0（路线规划特性全部落地 + 情感状态机/主动开口/情感保护/启动效应接通、88 测试、CI）→ AstrBot → QQ 全链路跑通；机器人 QQ 号 `1178469499` 常驻本机；旧数据在新代码下零迁移兼容。
 
 ---
 
@@ -60,7 +60,7 @@ small_fat_fish/
 │   ├── MEMORY_ITERATION_PLAN.md           # ★ 迭代路线图（v0.2→v0.5 已全部落地）
 │   ├── CHANGELOG.md                       # 变更记录
 │   └── HANDOVER.md                        # 本文档
-├── .github/workflows/ci.yml              # CI：3.11/3.12 + 77 测试 + CLI 冒烟
+├── .github/workflows/ci.yml              # CI：3.11/3.12 + 88 测试 + CLI 冒烟
 ├── pyproject.toml                        # 包定义（无第三方依赖，version 0.5.0）
 ├── src/extra_brain/                      # ★ 核心库（宿主无关，打磨对象）
 │   ├── models.py config.py embeddings.py extraction.py
@@ -72,7 +72,7 @@ small_fat_fish/
 │   ├── _conf_schema.json                 # WebUI 配置面板 schema
 │   └── README.md
 ├── dsh-plugin-extra-brain/               # DSH 适配器（暂搁置，加载坑见 §6 坑 4）
-└── tests/                                # 77 项测试（test_extra_brain 24 + test_server 8 + test_v2_features 45）
+└── tests/                                # 88 项测试（test_extra_brain 24 + test_server 12 + test_v2_features 52）
 
 * test_v2_features 覆盖 v0.2–v0.5 全部新特性 + 情感状态机集成链路（双时态/人格锚/保留度/四路召回/陪伴层/加密/HNSW/遗忘链/emotion_state）。
 ```
@@ -170,11 +170,11 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 > v0.2→v0.5 的路线（`MEMORY_ITERATION_PLAN.md`）已全部落地；情感状态机与 /memory stats/forget 已接通（2026-11-01）。以下是剩余收尾与下一期候选：
 
-1. ~~**emotion_state 接进抽取链路**~~ ✅ 已落地：抽取 prompt 输出 `emotion_state`（新事件默认 open）与 `emotion_updates`（推进已有情节）；巩固侧状态机校验迁移（非法转换拒绝并记警告）；反漠视规则生效——未平复事件（open/acknowledged/attended 且带情绪）保底温层、永不自动归档、检索加权 +0.10 并豁免分数门槛。77 项单测覆盖。
+1. ~~**emotion_state 接进抽取链路**~~ ✅ 已落地：抽取 prompt 输出 `emotion_state`（新事件默认 open）与 `emotion_updates`（推进已有情节）；巩固侧状态机校验迁移（非法转换拒绝并记警告）；反漠视规则生效——未平复事件（open/acknowledged/attended 且带情绪）保底温层、永不自动归档、检索加权 +0.10 并豁免分数门槛。
 2. ~~**`/memory status` 展示保留度档位分布**~~ ✅ 已落地：`/memory stats`（档位分布/归档比例/库体积）；`/memory forget <id>`（P1 墓碑默认；P0 物理删除需 `--hard --yes` 双确认，适配器不会自动批准）。
 3. ~~**主动开口定时器接线**~~ ✅ 已落地（v0.6.0 续）：适配器 `on_astrbot_loaded` 起 asyncio 循环，按「检查间隔 + 概率骰 + 每日上限 + 静默阈值 + 安静时段」调库 `build_proactive_prompt` 拿由头与素材，用 `context.llm_generate` 生成台词、`context.send_message(umo, ...)` 投递（回复路由来自最近人类消息的 umo，并持久化进 `ProactiveConfig.last_umo`）。指令：`/memory proactive status|enable|disable|test`。配置见插件面板 `proactive_*`（总开关 `proactive_enabled` 需重启）。
-4. **工作记忆启动效应** 🔜：`working_set` 内实体下一轮检索加权（v0.2.1 遗留）。
-5. **情感记忆保护 flags.bit6 / 多角度视角** 🔜：\|效价\|≥0.45 或唤起≥0.65 的记忆跳过情绪衰减、最多降到温层；fact/feeling/bond/story 四视角打标（v0.4.0 遗留）。
+4. ~~**工作记忆启动效应**~~ ✅ 已落地（v0.6.0 续）：`retrieve`/`build_injection`/四路召回新增 `primed_ids`——命中记忆本轮检索加权 +0.08 并候选池保送（不因相似度低被截断）；`SessionTracker.inject` 滚动 priming（本轮进入上下文的记忆成为下轮启动集）。
+5. ~~**情感记忆保护 flags.bit6**~~ ✅ 已落地（v0.6.0 续）：`models.is_emotion_protected`（语义 intensity≥0.65 或 效价非neutral且≥0.45；情节 带情绪且 importance≥0.75）——保留度间隔因子衰减率 0.06→0.02（慢 3 倍），闸机封顶温层（tier≤1，不改分数），永不落冷/归档/墓碑。多角度视角（fact/feeling/bond/story）仍 🔜。
 6. **群聊场景实测**：把机器人拉进群（peer 已按群号隔离；群聊需 @机器人 或 `/` 前缀唤醒）；观察群聊多人共享记忆库的行为是否符合预期。
 7. **每日定时巩固窗口**（规范 §5.1 第三触发）：适配器注册每日任务调 consolidate。
 8. ~~**持久化运行**~~ ✅ 已落地（本机策略禁计划任务 → Startup 回退）：`scripts/install-autostart.ps1` 注册开机自启 + 5 分钟看门狗（先试 Scheduled Task，被 `Access denied` 挡住则回退到用户 Startup 文件夹放无窗口 VBS 启动器跑 `watchdog.ps1`）；`start-silent.ps1` 幂等拉起 AstrBot+NapCat（端口在监听就跳过），API Key 从 User 环境变量读取（`install-autostart.ps1 -ApiKey` 持久化一次）。卸载：`scripts/uninstall-autostart.ps1`。QQ 登录会话若过期需重新扫码，跑可见的 `start-all.ps1` 一次。
@@ -185,7 +185,7 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 ## 8. 交接要点速查
 
-- **跑测试**：`python -m unittest discover -s tests -v`（应 77/77 OK，3.11/3.12 均可）
+- **跑测试**：`python -m unittest discover -s tests -v`（应 88/88 OK，3.11/3.12 均可）
 - **启动全部**：`$env:DEEPSEEK_API_KEY="<key>"; .\scripts\start-all.ps1 [QQ号]`（工作目录：仓库根；AstrBot 运行目录固定为 `D:\projects_software\astrbot-runtime`）
 - **停止全部**：`.\scripts\stop-all.ps1`
 - **查看状态**：`.\scripts\status-all.ps1`

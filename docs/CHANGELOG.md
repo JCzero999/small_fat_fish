@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-11-01（傍晚） — v0.6.0 续：主动开口接线 + 情感保护 + 启动效应 + 持久化运行 ✅
+
+按「B9 → A1 → A2 → A3」优先级顺序开工（提交 `320ac36`、`2df93af` 及本轮）：
+
+### B9 持久化运行 ✅
+- ✅ `scripts/start-silent.ps1`：无窗口幂等拉起 AstrBot + NapCat（端口在监听就跳过；日志落 runtime/data/logs/autostart）
+- ✅ `scripts/watchdog.ps1`：5 分钟保活循环，CIM 单实例防重
+- ✅ `scripts/install-autostart.ps1` / `uninstall-autostart.ps1`：优先注册计划任务；本机系统策略 `Access denied` → 自动回退**用户 Startup 文件夹 + 无窗口 VBS**（已安装并接管：6185/6099 LISTEN、6199 QQ WS ESTABLISHED）。`-ApiKey` 持久化到 User 环境变量（不落仓库）
+
+### A1 主动开口宿主接线 ✅
+- ✅ 库：`build_proactive_prompt(user_id, now, force, local_hour)` 一步到位（决策+由头+检索素材；未平复事件标注「优先惦记」；只读安全）；`should_proactive_open` 新增 `local_hour` 覆盖（跨时区安静时段正确）；`record_proactive_open` 新增 `umo`（回复路由持久化进 `ProactiveConfig.last_umo`）；`ensure_proactive_config` 引导
+- ✅ sidecar：`POST /proactive`（force/ensure/local_hour，非法 400）、`POST /proactive_record`
+- ✅ 适配器：`on_astrbot_loaded` 起 asyncio 循环——概率骰（默认 30%/20min）→ 库决策 → `llm_generate` 台词（库只给由头不给词）→ `send_message(umo)` 投递 → 记录限频；`on_llm_request` 跟踪 `_last_human_at`/`_last_umo`
+- ✅ 指令 `/memory proactive status|enable|disable|test`（test 绕概率直接开口一次）；配置面板 8 个 `proactive_*` 项（**默认关闭**，`proactive_enabled=true` 重启生效）
+- ✅ 单测 +4（/proactive ensure 引导/安静时段 local_hour/record 后限频/非法 400）
+
+### A2 情感记忆保护 flags.bit6 ✅（v0.4.0 遗留）
+- ✅ `models.is_emotion_protected`：语义 intensity≥0.65（唤起）或 效价非 neutral 且 intensity≥0.45；情节 带情绪且 importance≥0.75
+- ✅ 保留度：受保护记忆间隔衰减率 0.06→0.02（遗忘曲线慢 3 倍）；闸机封顶温层 tier≤1（只封档不改分），永不落冷/归档/墓碑
+- ✅ 对照单测：730 天陈旧的普通记忆归档，情感记忆保底温层
+
+### A3 工作记忆启动效应 ✅（v0.2.1 遗留）
+- ✅ `search`/四路召回/`retrieve`/`build_injection` 新增 `primed_ids`：命中加权 +0.08 + 候选池保送（不因相似度低被截断；Path B/C 重算分同样叠加）
+- ✅ `SessionTracker.inject` 滚动 priming：本轮进入上下文的记忆成为下轮启动集
+- ✅ 单测：primed 加权、tracker 滚动语义
+
+### 验证与文档
+- ✅ **88 项单测全绿**（24 基础 + 12 sidecar + 52 特性），适配器等价性经真实 astrbot 包 import 验证
+- ✅ HANDOVER/MOUNT/README/迭代计划的验收清单与状态表同步（启动效应/情感保护/主动开口从 🔜 翻 ✅）；QQ 机器人现由 Startup 看门狗常驻，无需手动拉起
+
+---
+
 ## 2026-11-01（下午） — extra_brain v0.6.0：情感状态机接通 + 文档全面更新 ✅
 
 ### 新增

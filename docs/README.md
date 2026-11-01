@@ -48,7 +48,7 @@
 - **HNSW 索引**：纯标准库实现（M=16 / efConstruction=200 / efSearch=64，id 哈希定层高可复现）；`VectorIndex` 小库精确扫描，≥2000 条自动切换
 - **静态加密**：`EXTRA_BRAIN_ENCRYPTION_PASSPHRASE` 口令（PBKDF2 派生），全表透明加解密。注意：这是混淆级加密，生产建议叠加文件系统加密（BitLocker / LUKS）
 - **遗忘链路**：`forget <id>` 默认 P1 墓碑（清内容留 digest 入审计）；`--hard --yes` 才 P0 物理删除，永不自动执行
-- **CI**：GitHub Actions，Python 3.11/3.12 矩阵 + 77 项单测 + CLI 冒烟
+- **CI**：GitHub Actions，Python 3.11/3.12 矩阵 + 88 项单测 + CLI 冒烟
 
 ### v0.6.0 情感事件状态机接通 + 适配器面板指令
 
@@ -58,6 +58,13 @@
 - **AstrBot 适配器新指令**：`/memory stats`（保留度档位分布/归档比例/库体积）、`/memory forget`（P1 墓碑默认，P0 需 `--hard --yes` 双确认）；`/memory search` 支持多词查询（GreedyStr）
 - **sidecar 新端点**：`GET /stats`、`POST /forget`、`--read-only`/`--encryption-passphrase` 启动参数
 - 包根导出补全（`RelationshipModel`/`UserSchema`/`NarrativeLayer`/`MemoryAssociation`/`ProactiveConfig`/`is_unresolved_episode`/抽取候选类等）
+
+### v0.6.0 续：主动开口 / 情感保护 / 启动效应 / 持久化
+
+- **主动开口接线**：`build_proactive_prompt`（决策+由头+素材一步到位，`local_hour` 支持跨时区安静时段）、`/memory proactive status|enable|disable|test`、sidecar `/proactive` `/proactive_record`；AstrBot 适配器 asyncio 循环（概率骰/每日上限/静默阈值/台词交模型）；回复路由持久化 `ProactiveConfig.last_umo`；**默认关闭**，面板 `proactive_enabled` 开启
+- **情感记忆保护**（flags.bit6 语义）：`models.is_emotion_protected`——高情绪显著性记忆遗忘曲线放慢 3 倍、保底温层（tier≤1 只封档不改分），永不落冷/归档/墓碑
+- **工作记忆启动效应**：`primed_ids` 贯穿全部检索路径（+0.08 加权 + 候选保送）；`SessionTracker.inject` 滚动 priming——上一轮进入上下文的记忆这一轮更容易被想起
+- **持久化运行**：`scripts/install-autostart.ps1`（计划任务优先，被系统策略挡则回退用户 Startup 无窗口 VBS + 5 分钟看门狗幂等拉起；`-ApiKey` 持久化 User 环境变量，卸载用 `uninstall-autostart.ps1`）
 
 运行时只使用 Python 标准库，不依赖外部向量服务；加密、HNSW、真实嵌入全部可选。
 
@@ -337,7 +344,7 @@ DSH 是 Developer Preview；AstrBot 为活跃维护的成熟框架（支持 QQ �
 
 ## 验证边界
 
-- **离线单测 77 项**（24 项基础 + 8 项 sidecar + 45 项 v0.2–v0.6 新特性）：数据校验、持久化、空抽取与闲聊过滤、去重、冲突修正、七因子保留度与归档、保护与晋升、事务回滚、加权检索与四路召回、注入预算、跨会话情绪召回、人格锚回滚、感觉/工作记忆、只读模式、存储统计、陪伴层五表 CRUD、主动开口决策矩阵、加密密文断言、HNSW 召回、遗忘链路（P1/P0）、情感事件状态机集成（默认 open / 显式推进 / 非法迁移拒绝 / 反漠视不归档 / schema 校验）、sidecar HTTP（per-peer 隔离、错误码、只读降级、/stats、/forget）。Python 3.11/3.12 双版本 CI 全绿（GitHub Actions）。
+- **离线单测 88 项**（24 项基础 + 12 项 sidecar + 52 项 v0.2–v0.6 新特性）：数据校验、持久化、空抽取与闲聊过滤、去重、冲突修正、七因子保留度与归档、保护与晋升、事务回滚、加权检索与四路召回、注入预算、跨会话情绪召回、人格锚回滚、感觉/工作记忆、只读模式、存储统计、陪伴层五表 CRUD、主动开口决策矩阵、加密密文断言、HNSW 召回、遗忘链路（P1/P0）、情感事件状态机集成（默认 open / 显式推进 / 非法迁移拒绝 / 反漠视不归档 / schema 校验）、sidecar HTTP（per-peer 隔离、错误码、只读降级、/stats、/forget）。Python 3.11/3.12 双版本 CI 全绿（GitHub Actions）。
 - **向后兼容**：v0.5.0 代码以只读方式完整加载 AstrBot 运行期的旧 `.db`（QQ 15 条 + WebChat 1 条）验证通过，新字段全部缺省安全，无需迁移。
 - **端到端**：AstrBot + WebChatUI 跨会话暗号、AstrBot + QQ 跨上下文暗号均验证通过；v0.5.0 重启后在真实 QQ 库上「新增暗号写入 + 跨 reset 召回 + 旧记忆零丢失」四步回归通过，七因子分档在真实数据上生效（高激活记忆落 P5，新写入落 P4）。
 

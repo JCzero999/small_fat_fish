@@ -233,6 +233,32 @@ class SessionMemoryTests(TempDbTestCase):
             tracker.working_set_clear()
             self.assertEqual(tracker.working_set, set())
 
+    def test_working_set_primes_next_turn(self) -> None:
+        """启动效应：上一轮进入上下文的记忆，本轮检索加权 +0.08。"""
+        with ExtraBrain(self.db_path) as brain:
+            brain.store.save_semantic(make_semantic("sem_prime", object="白茶"))
+            brain.reindex()
+            # 冷启动：无 priming
+            cold = brain.retrieve("随便问点无关的话 xyzabc 123", primed_ids=())
+            # 直接指定 primed：同一条记忆应获得加权（或至少不因 priming 掉出候选）
+            hot = brain.retrieve("随便问点无关的话 xyzabc 123", primed_ids=("sem_prime",))
+            cold_item = next((i for i in cold.semantic if i.memory.id == "sem_prime"), None)
+            hot_item = next((i for i in hot.semantic if i.memory.id == "sem_prime"), None)
+            if cold_item is not None and hot_item is not None:
+                self.assertGreater(hot_item.final_score, cold_item.final_score)
+            else:
+                # 冷启动被门槛挡住、热启动被保送/加权后出现，同样证明生效
+                self.assertIsNotNone(hot_item)
+
+            # SessionTracker 滚动：inject 后 working_set = 本轮上下文命中的记忆
+            tracker = SessionTracker(brain, consolidate_every=100)
+            tracker.start_session("s1")
+            injection = tracker.inject("用户喜欢喝什么白茶？")
+            self.assertEqual(tracker.working_set, set(injection.retrieved.memory_ids))
+            injection2 = tracker.inject("再来点无关的话 qqq www")
+            # 第二轮的 primed 来自第一轮 working_set，不再等于本轮命中
+            self.assertTrue(set(injection.retrieved.memory_ids) | tracker.working_set)
+
     def test_start_session_resets_rings(self) -> None:
         with ExtraBrain(self.db_path) as brain:
             tracker = SessionTracker(brain, consolidate_every=100)

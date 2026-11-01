@@ -124,6 +124,7 @@ class ExtraBrain:
         now: datetime | None = None,
         as_of: str | None = None,
         path: str | None = None,
+        primed_ids: Sequence[str] = (),
     ) -> RetrievalResult:
         if path is not None:
             return self.retriever.search_four_paths(
@@ -133,6 +134,7 @@ class ExtraBrain:
                 now=now,
                 path=path,
                 as_of=as_of,
+                primed_ids=primed_ids,
             )
         return self.retriever.search(
             query,
@@ -140,6 +142,7 @@ class ExtraBrain:
             entities=entities,
             now=now,
             as_of=as_of,
+            primed_ids=primed_ids,
         )
 
     def build_injection(
@@ -150,9 +153,14 @@ class ExtraBrain:
         entities: Sequence[str] = (),
         token_limit: int | None = None,
         now: datetime | None = None,
+        primed_ids: Sequence[str] = (),
     ) -> Injection:
         retrieved = self.retrieve(
-            query, recent_context=recent_context, entities=entities, now=now
+            query,
+            recent_context=recent_context,
+            entities=entities,
+            now=now,
+            primed_ids=primed_ids,
         )
         injection = self.retriever.build_injection(
             self.core, retrieved, token_limit=token_limit

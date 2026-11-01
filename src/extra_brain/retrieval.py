@@ -92,6 +92,7 @@ class MemoryRetriever:
         semantic_top_k: int | None = None,
         episodic_top_k: int | None = None,
         as_of: str | None = None,
+        primed_ids: Iterable[str] = (),
     ) -> RetrievalResult:
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must not be empty")
@@ -132,6 +133,9 @@ class MemoryRetriever:
             and self._eligible(memory, normalized_entities, as_of_dt)
         ]
 
+        primed = frozenset(
+            memory_id for memory_id in primed_ids if isinstance(memory_id, str)
+        )
         return RetrievalResult(
             semantic=self._rank_type(
                 semantic_memories,
@@ -142,6 +146,7 @@ class MemoryRetriever:
                 semantic_top_k
                 if semantic_top_k is not None
                 else self.config.semantic_top_k,
+                primed_ids=primed,
             ),
             episodic=self._rank_type(
                 episodic_memories,
@@ -152,6 +157,7 @@ class MemoryRetriever:
                 episodic_top_k
                 if episodic_top_k is not None
                 else self.config.episodic_top_k,
+                primed_ids=primed,
             ),
         )
 
@@ -188,6 +194,7 @@ class MemoryRetriever:
         now: datetime | None = None,
         path: str | None = None,
         as_of: str | None = None,
+        primed_ids: Iterable[str] = (),
     ) -> RetrievalResult:
         """四路召回（v0.3.0）：
 
@@ -201,6 +208,9 @@ class MemoryRetriever:
         now = now or utc_now()
         if now.tzinfo is None:
             raise ValueError("now must be timezone-aware")
+        primed_ids = frozenset(
+            memory_id for memory_id in primed_ids if isinstance(memory_id, str)
+        )
 
         # Path A: 语义检索（标准检索）
         standard = self.search(
@@ -209,6 +219,7 @@ class MemoryRetriever:
             entities=entities,
             now=now,
             as_of=as_of,
+            primed_ids=primed_ids,
         )
         if path == "A":
             standard.path = "A"
@@ -221,6 +232,7 @@ class MemoryRetriever:
             entities=entities,
             now=now,
             as_of=as_of,
+            primed_ids=primed_ids,
         )
         if path == "B":
             entities_only.path = "B"
@@ -233,6 +245,7 @@ class MemoryRetriever:
             entities=entities,
             now=now,
             as_of=as_of,
+            primed_ids=primed_ids,
         )
         if path == "C":
             emotion_first.path = "C"
@@ -281,6 +294,7 @@ class MemoryRetriever:
         entities: Iterable[str] = (),
         now: datetime | None = None,
         as_of: str | None = None,
+        primed_ids: Iterable[str] = (),
     ) -> RetrievalResult:
         """Path B：只使用实体关键词硬过滤，不计算语义相似度分数（similarity 设为 0）。"""
         if not entities:
@@ -291,8 +305,21 @@ class MemoryRetriever:
             entities=list(entities),
             now=now,
             as_of=as_of,
+            primed_ids=primed_ids,
         )
         # 重新计算分数：只保留 importance + recency + emotion，similarity=0
+        primed_set = set(primed_ids)
+
+        def _recompute(item: ScoredMemory) -> float:
+            score = (
+                0.25 * item.importance
+                + 0.20 * item.recency_boost
+                + 0.15 * item.emotion_match
+            )
+            if item.memory.id in primed_set:
+                score = min(1.0, score + 0.08)
+            return score
+
         result.semantic = [
             ScoredMemory(
                 memory=item.memory,
@@ -300,9 +327,7 @@ class MemoryRetriever:
                 importance=item.importance,
                 recency_boost=item.recency_boost,
                 emotion_match=item.emotion_match,
-                final_score=0.25 * item.importance
-                + 0.20 * item.recency_boost
-                + 0.15 * item.emotion_match,
+                final_score=_recompute(item),
             )
             for item in result.semantic
         ]
@@ -313,9 +338,7 @@ class MemoryRetriever:
                 importance=item.importance,
                 recency_boost=item.recency_boost,
                 emotion_match=item.emotion_match,
-                final_score=0.25 * item.importance
-                + 0.20 * item.recency_boost
-                + 0.15 * item.emotion_match,
+                final_score=_recompute(item),
             )
             for item in result.episodic
         ]
@@ -330,6 +353,7 @@ class MemoryRetriever:
         entities: Iterable[str] = (),
         now: datetime | None = None,
         as_of: str | None = None,
+        primed_ids: Iterable[str] = (),
     ) -> RetrievalResult:
         """Path C：以情绪共鸣为主导，语义相似度权重降低，情绪匹配权重提高。"""
         result = self.search(
@@ -338,8 +362,22 @@ class MemoryRetriever:
             entities=list(entities),
             now=now,
             as_of=as_of,
+            primed_ids=primed_ids,
         )
         query_emotion = detect_emotion("\n".join([*recent_context, query]))
+        primed_set = set(primed_ids)
+
+        def _recompute(item: ScoredMemory) -> float:
+            score = (
+                0.30 * item.semantic_similarity
+                + 0.25 * item.importance
+                + 0.20 * item.recency_boost
+                + 0.25 * item.emotion_match
+            )
+            if item.memory.id in primed_set:
+                score = min(1.0, score + 0.08)
+            return score
+
         result.semantic = [
             ScoredMemory(
                 memory=item.memory,
@@ -347,12 +385,7 @@ class MemoryRetriever:
                 importance=item.importance,
                 recency_boost=item.recency_boost,
                 emotion_match=item.emotion_match,
-                final_score=(
-                    0.30 * item.semantic_similarity
-                    + 0.25 * item.importance
-                    + 0.20 * item.recency_boost
-                    + 0.25 * item.emotion_match
-                ),
+                final_score=_recompute(item),
             )
             for item in result.semantic
             if query_emotion is None or item.emotion_match > 0.3
@@ -364,12 +397,7 @@ class MemoryRetriever:
                 importance=item.importance,
                 recency_boost=item.recency_boost,
                 emotion_match=item.emotion_match,
-                final_score=(
-                    0.30 * item.semantic_similarity
-                    + 0.25 * item.importance
-                    + 0.20 * item.recency_boost
-                    + 0.25 * item.emotion_match
-                ),
+                final_score=_recompute(item),
             )
             for item in result.episodic
             if query_emotion is None or item.emotion_match > 0.3
@@ -402,6 +430,7 @@ class MemoryRetriever:
         query_emotion: str | None,
         now: datetime,
         top_k: int,
+        primed_ids: frozenset[str] | set[str] = frozenset(),
     ) -> list[ScoredMemory]:
         if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0:
             raise ValueError("top_k must be a non-negative integer")
@@ -410,7 +439,16 @@ class MemoryRetriever:
             similarity = cosine_similarity(query_vector, vectors[memory.id])
             candidates.append((similarity, memory))
         candidates.sort(key=lambda item: item[0], reverse=True)
-        candidates = candidates[: self.config.retrieval_candidate_limit]
+        # 启动效应候选保送：工作记忆里的条目即使相似度排名靠后，也保留进候选池。
+        if primed_ids:
+            kept = [
+                item
+                for index, item in enumerate(candidates)
+                if index < self.config.retrieval_candidate_limit or item[1].id in primed_ids
+            ]
+            candidates = kept
+        else:
+            candidates = candidates[: self.config.retrieval_candidate_limit]
 
         scored = []
         for similarity, memory in candidates:
@@ -436,6 +474,9 @@ class MemoryRetriever:
             unresolved = is_unresolved_episode(memory)
             if unresolved:
                 final_score = min(1.0, final_score + 0.10)
+            # 启动效应（v0.2.1 遗留）：工作记忆（上一轮刚触及）的条目加 0.08。
+            if memory.id in primed_ids:
+                final_score = min(1.0, final_score + 0.08)
             if final_score < self.config.min_retrieval_score and not unresolved:
                 continue
             scored.append(

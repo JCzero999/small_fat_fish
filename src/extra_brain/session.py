@@ -110,18 +110,21 @@ class SessionTracker:
         token_limit: int | None = None,
         now: datetime | None = None,
     ) -> Injection:
-        # 工作记忆：将本轮检索到的记忆 ID 标记入 working_set
+        # 启动效应：上一轮触及的记忆（working_set）在本轮检索中获得加权。
+        primed = sorted(self.working_set)
         injection = self.brain.build_injection(
             query,
             recent_context=recent_context,
             entities=entities,
             token_limit=token_limit,
             now=now if now is not None else self.clock(),
+            primed_ids=primed,
         )
+        # 工作记忆滚动：本轮实际进入上下文的记忆成为下一轮的启动集。
+        self.working_set = set()
         for mem_id in injection.retrieved.memory_ids:
             if len(self.working_set) >= self.working_set_cap:
-                # 移除最早加入的一个（FIFO），保持集合大小不超过上限
-                self.working_set.discard(next(iter(self.working_set)))
+                break
             self.working_set.add(mem_id)
         return injection
 
