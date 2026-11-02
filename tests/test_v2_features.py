@@ -965,6 +965,7 @@ class CompanionLayerShareTests(TempDbTestCase):
         with self._make("alice") as alice:
             core = alice.core
             from extra_brain.models import ActiveThread, to_iso8601 as _iso, utc_now as _now
+            core.identity.name = "小豚"
             core.active_threads.append(
                 ActiveThread(id="t_1", summary="暗号核对", status="open", last_mentioned=_iso(_now()))
             )
@@ -994,7 +995,7 @@ class CompanionLayerShareTests(TempDbTestCase):
             self.assertIn("sem_shared_pref", bob_result.memory_ids)
 
     def test_self_reference_guard(self) -> None:
-        path = self.db_path / "_global.db"
+        path = self.db_path.parent / "_global.db"
         brain = ExtraBrain(path, companion_db=path)
         try:
             self.assertIsNone(brain.companion)  # 同路径不挂载，不无限递归
