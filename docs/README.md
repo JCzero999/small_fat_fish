@@ -219,31 +219,292 @@ python scripts/demo_closed_loop.py --db demo.db --out demo_report.json
 - `final.injection.context`：最终注入文本，看「被记住的感觉」是否自然
 - `final.semantic` / `final.core`：确认闲聊没混进来、改口后的新值在、旧值已降权
 
-## CLI
+## CLI 命令参考
 
-```text
+二进制名：`extra-brain`（`pip install -e .` 后可用）。不安装时：`PYTHONPATH=src python -m extra_brain`。
+
+### 全局选项（所有子命令通用）
+
+| 选项 | 默认 | 说明 |
+|------|------|------|
+| `--db <path>` | `./extra_brain.db` | SQLite 数据库路径，可由 `EXTRA_BRAIN_DB` 环境变量覆盖 |
+| `--companion-db <path>` | （空） | 全局伴侣库路径——人设、称呼、稳定偏好跨所有 peer 共享，可由 `EXTRA_BRAIN_COMPANION_DB` 环境变量覆盖 |
+
+### 环境变量
+
+| 变量 | 生效点 | 说明 |
+|------|--------|------|
+| `EXTRA_BRAIN_DB` | `--db` 默认值 | 指定主数据库路径 |
+| `EXTRA_BRAIN_COMPANION_DB` | `--companion-db` 默认值 | 指定全局伴侣库路径 |
+| `EXTRA_BRAIN_ENCRYPTION_PASSPHRASE` | 加密启用 | 静态加密口令（XOR 混淆级），空值=不加密 |
+| `DEEPSEEK_API_KEY` | 抽取器必填 | 深度抽取 API Key |
+| `DEEPSEEK_MODEL` | 抽取器默认 `deepseek-chat` | 抽取模型名 |
+| `DEEPSEEK_BASE_URL` | 抽取器默认 `https://api.deepseek.com` | OpenAI 兼容 API base URL |
+| `EMBEDDING_API_BASE` | 嵌入器可选 | `OpenAICompatibleEmbedder` 的 `/embeddings` base URL，空值则降级本地哈希 |
+| `EMBEDDING_API_KEY` | 嵌入器可选 | 嵌入 API Key |
+
+### 子命令一览
+
+```
+init / core / consolidate / search / inject / list / protect / forget /
+stats / associate / audit / reindex / rebuild / chat / sync-persona / pull-persona
+```
+
+---
+
+### `init` — 初始化数据库
+
+```bash
 extra-brain --db memory.db init
+```
+
+建表（如果不存在）并打印当前 Core Memory 的 JSON。首次运行时 identity 为默认值 `"额外大脑"`。
+
+### `core` — 查看或替换 Core Memory
+
+```bash
+# 查看当前 Core
 extra-brain --db memory.db core
-extra-brain --db memory.db core --file core.json
-extra-brain --db memory.db core --rollback rev_001
+
+# 用 JSON 文件完整替换 Core
+extra-brain --db memory.db core --file persona.json
+
+# 回滚到历史人格锚版本
+extra-brain --db memory.db core --rollback push_2026-11-02T01:05:35Z
+```
+
+**`--file persona.json`** 的最小示例（未指定的字段保留原值）：
+```json
+{
+  "identity": {
+    "name": "小豚",
+    "persona_core": "十几岁的女儿，活泼好动，有点叛逆但心地善良。",
+    "relationship_definition": "用户的女儿",
+    "speaking_style": "像初中生一样说话，偶尔用网络用语，带点撒娇。"
+  }
+}
+```
+
+**`--rollback`** 版本 ID 来自 `persona_anchor_history` 里每个条目的 `version` 字段；每次 `sync-persona` 都会 push 一个快照。
+
+### `consolidate` — 用大模型深度抽取并巩固对话
+
+```bash
 extra-brain --db memory.db consolidate conversation.txt
-extra-brain --db memory.db search "查询" --entity "实体"
-extra-brain --db memory.db search "查询" --view feeling --view bond
-extra-brain --db memory.db inject "查询" --context-file recent.txt --token-limit 1800
+extra-brain --db memory.db consolidate conversation.txt --session-id session-001
+```
+
+**参数：**
+
+| 位置参数 | 说明 |
+|----------|------|
+| `file` | UTF-8 对话文本文件，格式 `user: ...` / `assistant: ...`（每行一轮） |
+
+| 选项 | 说明 |
+|------|------|
+| `--session-id <id>` | 写入情节记忆的会话标识 |
+
+需要 `DEEPSEEK_API_KEY`。抽取失败时不写入，不会污染记忆库。
+
+### `search` — 检索记忆并输出评分
+
+```bash
+extra-brain --db memory.db search "我又想起换工作的事"
+extra-brain --db memory.db search "查询" --entity "爸爸" --entity "白茶"
+extra-brain --db memory.db search "查询" --view fact --view feeling
+extra-brain --db memory.db search "查询" --context-file recent.txt
+```
+
+**参数：**
+
+| 位置参数 | 说明 |
+|----------|------|
+| `query` | 自然语言查询 |
+
+| 选项 | 说明 |
+|------|------|
+| `--entity <实体>` | 实体/关键词硬过滤，可重复 |
+| `--context-file <path>` | 最近上下文文件（每行一轮），只取最后 5 行 |
+| `--view <视角>` | 视角过滤：`fact` / `feeling` / `bond` / `story`，可重复 |
+
+返回完整 `RetrievalResult` JSON，含每条记忆的各项评分与 `path`（四路召回命中的哪几路）。
+
+### `inject` — 生成可直接放入系统提示词的注入上下文
+
+```bash
+extra-brain --db memory.db inject "我又想起换工作的事" > memory_context.txt
+extra-brain --db memory.db inject "查询" --context-file recent.txt --token-limit 1800 --view bond
+```
+
+参数同 `search`，外加 `--token-limit`（覆盖默认注入预算）。输出纯文本，可直接拼进宿主模型的系统提示词。**注意**：实际进入注入上下文的记忆会增加 `activation_count`（`stats` 里能看到激活次数）。
+
+### `list` — 列出长期记忆
+
+```bash
 extra-brain --db memory.db list semantic
 extra-brain --db memory.db list episodic --include-archived
 extra-brain --db memory.db list style
-extra-brain --db memory.db protect sem_20261029_xxx
-extra-brain --db memory.db protect sem_20261029_xxx --remove
-extra-brain --db memory.db forget sem_20261029_xxx                # P1 墓碑
-extra-brain --db memory.db forget sem_20261029_xxx --hard --yes   # P0 物理删除（显式审批）
-extra-brain --db memory.db stats                                  # 分层统计
-extra-brain --db memory.db associate sem_20261029_xxx             # 2 跳联想链
+```
+
+**参数：**
+
+| 位置参数 | 说明 |
+|----------|------|
+| `{semantic\|episodic\|style}` | 记忆类型 |
+
+| 选项 | 说明 |
+|------|------|
+| `--include-archived` | 包含已归档/墓碑的记忆 |
+
+### `protect` — 将记忆加入或移出 Core 保护列表
+
+```bash
+extra-brain --db memory.db protect sem_20261029_001            # 加入保护（评分锁死 1.0，永不归档）
+extra-brain --db memory.db protect sem_20261029_001 --remove   # 移出保护
+```
+
+受保护的记忆在衰减时 `retention_tier` 始终保持 P5（热）。
+
+### `forget` — 遗忘记忆（六档处置入口）
+
+```bash
+extra-brain --db memory.db forget sem_20261029_001           # 默认 P1 墓碑：清空内容，留 digest + 审计
+extra-brain --db memory.db forget sem_20261029_001 --hard --yes  # P0 物理删除（显式审批）
+```
+
+| 选项 | 说明 |
+|------|------|
+| （无） | P1：墓碑化——清空内容留 digest，`archive_ratio` 会上涨，检索默认不再命中 |
+| `--hard --yes` | P0：物理删除（永不自动执行，必须同时带两个 flag 显式审批） |
+
+### `stats` — 查看记忆库分层统计
+
+```bash
+extra-brain --db memory.db stats
+```
+
+输出 JSON：各类型总数 / 归档数 / 归档比例 / 保留度档位分布 / DB 文件大小。只读查询，不产生任何副作用。
+
+### `associate` — 查看某条记忆的 2 跳联想链
+
+```bash
+extra-brain --db memory.db associate sem_20261029_001
+```
+
+走 `MemoryAssociation` 表的 Hebbian 共激活关联，输出两跳邻居及关联强度。
+
+### `audit` — 查看操作审计日志
+
+```bash
 extra-brain --db memory.db audit --limit 50
+extra-brain --db memory.db audit --limit 10
+```
+
+每条包含 `timestamp / transaction_id / operation / entity_type / entity_id / before_json / after_json`。审计快照可能包含个人记忆，应像数据库一样限制访问。
+
+### `reindex` — 重建向量索引
+
+```bash
 extra-brain --db memory.db reindex
-extra-brain --db memory.db rebuild from-log --yes     # 崩溃安全：从审计快照重建派生层
-extra-brain --db memory.db rebuild replay-pending    # 重放影子日志里未完成的巩固输入
-extra-brain --db memory.db chat --threshold 8
+```
+
+用当前 `Embedder` 实现（本地哈希或 API）重算所有 Semantic / Episodic 的向量，输出 `{"indexed": <条数>}`。更换嵌入器后必须调用。
+
+### `rebuild` — 崩溃安全重建
+
+```bash
+# 从审计快照重建记忆表 + 重算向量（单事务，损坏快照自动跳过）
+extra-brain --db memory.db rebuild from-log --yes
+
+# 重放影子日志里未完成的巩固输入（pending / failed）
+extra-brain --db memory.db rebuild replay-pending --limit 10
+```
+
+| 位置参数 | 说明 |
+|----------|------|
+| `from-log` | 从 `operation_log` 的 after 快照重建整张表；必须带 `--yes` 显式审批 |
+| `replay-pending` | 重放 `session_log` 中 `status in ('pending','failed')` 的条目 |
+
+| 选项 | 说明 |
+|------|------|
+| `--yes` | `from-log` 全表重建需显式确认 |
+| `--limit N` | `replay-pending` 最多重放 N 条（默认 10） |
+
+**崩溃链路**：抽取期间进程崩溃 → 输入已落 `session_log`（pending）→ 重跑 `replay-pending` 即可；如果连抽取结果也丢了，用 `from-log` 从审计快照完整还原。
+
+### `chat` — 本地交互式对话
+
+```bash
+extra-brain --db memory.db chat --threshold 8         # 默认累计 8 轮后自动巩固
+extra-brain --db memory.db chat --threshold 5
+extra-brain --db memory.db chat --no-auto             # 关闭自动巩固，仅手动 :consolidate
+```
+
+| 选项 | 说明 |
+|------|------|
+| `--threshold N` | 累计多少轮后自动巩固（默认 8） |
+| `--no-auto` | 关闭自动巩固，仅在输入 `:consolidate` 时才写库 |
+
+**对话格式**：每行一条 user 消息；以 `a:` 开头记为 assistant 轮。
+
+```
+你好呀
+a: 你好！今天想聊点什么？
+我最近压力有点大
+```
+
+**chat 模式内部命令**（以 `:` 开头）：
+
+| 命令 | 说明 |
+|------|------|
+| `:inject <查询>` | 查看当前查询会注入哪些长期记忆（含完整 Core），别名 `:remember` |
+| `:consolidate` | 立即巩固当前未处理消息 |
+| `:core` | 查看 Core Memory 全文 |
+| `:list <kind>` | 列出 semantic / episodic / style |
+| `:new` | 结束当前会话并开启新会话（自动巩固剩余消息） |
+| `:help` | 显示帮助 |
+| `:quit` 或 `:q` / `exit` | 退出（自动巩固剩余消息） |
+
+需要 `DEEPSEEK_API_KEY`（自动巩固和手动 `:consolidate` 都走抽取）。
+
+### `sync-persona` — 把本地人设推入全局伴侣库
+
+```bash
+extra-brain --db alice.db --companion-db global.db sync-persona
+```
+
+将本库 Core 的 `identity` 和 `user_stable_profile` 整体推入 `--companion-db`（peer 本地的 `active_threads` 保持隔离不推送）。每次 push 自动在 `persona_anchor_history` 留一个版本快照，支持 `core --rollback` 回滚。返回 `{"pushed_to": "...", "anchor": "push_..."}`。
+
+### `pull-persona` — 从全局伴侣库拉取人设
+
+```bash
+extra-brain --db charlie.db --companion-db global.db pull-persona
+```
+
+新 peer 初始化时调一次即可自动继承全局人设；不覆盖 peer 本地已有字段，只补齐空值。返回 `{"pulled_from": "..."}`。
+
+---
+
+### 典型工作流
+
+```bash
+# 1. 单 peer 调整人设 → 推到全局
+extra-brain --db alice.db core --file persona.json
+extra-brain --db alice.db --companion-db global.db sync-persona
+
+# 2. 新 peer 自动拉取全局人设
+extra-brain --db charlie.db --companion-db global.db pull-persona
+
+# 3. 定期检查记忆库健康
+extra-brain --db alice.db stats
+extra-brain --db alice.db audit --limit 10
+
+# 4. 检索 + 注入给宿主模型
+extra-brain --db alice.db inject "用户今天心情怎么样？" > context.txt
+
+# 5. 崩溃后恢复
+extra-brain --db alice.db rebuild replay-pending
+extra-brain --db alice.db rebuild from-log --yes
 ```
 
 `--context-file` 每行一轮，只取最后 5 行。审计快照可能包含个人记忆，应像数据库一样限制访问。
