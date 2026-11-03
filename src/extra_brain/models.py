@@ -831,6 +831,7 @@ class NarrativeLayer:
 
     包括亲近期/磨合期/摩擦期等阶段标记，+ 主题 + 事件引用。
     能回答「我们是什么关系」，而不仅是「他喜欢什么」。
+    v0.9.0: 增加 unresolved_threads。
     """
 
     id: str
@@ -840,6 +841,7 @@ class NarrativeLayer:
     event_ids: list[str]  # 引用的情节记忆 ID
     summary: str  # 叙事摘要
     last_updated: str
+    unresolved_threads: list[str] = field(default_factory=list)  # v0.9.0: 未平复心结/目标
     created_at: str | None = None
 
     def __post_init__(self) -> None:
@@ -852,6 +854,9 @@ class NarrativeLayer:
         )
         self.theme = _string(self.theme, "narrative.theme")
         self.event_ids = _string_list(self.event_ids, "narrative.event_ids")
+        self.unresolved_threads = _string_list(
+            self.unresolved_threads, "narrative.unresolved_threads"
+        )
         self.summary = _string(self.summary, "narrative.summary")
         self.last_updated = _datetime_field(
             self.last_updated, "narrative.last_updated"
@@ -870,6 +875,7 @@ class NarrativeLayer:
             phase=data["phase"],
             theme=data["theme"],
             event_ids=data.get("event_ids", []),
+            unresolved_threads=data.get("unresolved_threads", []),
             summary=data["summary"],
             last_updated=data["last_updated"],
             created_at=data.get("created_at"),
@@ -882,6 +888,7 @@ class NarrativeLayer:
             "phase": self.phase,
             "theme": self.theme,
             "event_ids": list(self.event_ids),
+            "unresolved_threads": list(self.unresolved_threads),
             "summary": self.summary,
             "last_updated": self.last_updated,
             "created_at": self.created_at,
@@ -1055,3 +1062,150 @@ class ProactiveConfig:
     @property
     def estimated_tokens(self) -> int:
         return estimate_tokens(self.to_dict())
+
+
+# ── v0.7.0 SelfState ──────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class SelfState:
+    """可持久、可演化的「这一刻的自己」。
+
+    存储为 separate table（peer 级单行），由每次 consolidate 后更新。
+    注入时在 Core 之前优先输出，主动开口决策也读它。
+    """
+
+    energy: float = 0.85                     # 0.0–1.0
+    mood_baseline: str = "平静"              # 当前底色情绪
+    active_goals: list[str] = field(default_factory=list)  # ≤5
+    self_narrative: str = ""                 # ≤80 字
+    last_significant_event_id: str | None = None
+    fatigue_reason: str | None = None        # v0.9.0: 最近 energy 下降的原因
+    updated_at: str = ""
+    version: int = 1
+
+    _ENERGY_MIN: float = field(default=0.15, init=False, repr=False)
+    _ENERGY_MAX: float = field(default=1.0, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.energy = float(self.energy)
+        if self.energy != self.energy:  # NaN check
+            raise MemoryValidationError("self_state.energy must be a valid number")
+        self.energy = max(self._ENERGY_MIN, min(self._ENERGY_MAX, self.energy))
+        self.mood_baseline = _string(self.mood_baseline, "self_state.mood_baseline")
+        self.active_goals = _string_list(self.active_goals, "self_state.active_goals")[:5]
+        self.self_narrative = _string(
+            self.self_narrative, "self_state.self_narrative", allow_empty=True
+        )
+        if len(self.self_narrative) > 80:
+            raise MemoryValidationError("self_state.self_narrative must not exceed 80 characters")
+        self.last_significant_event_id = (
+            _string(self.last_significant_event_id, "self_state.last_significant_event_id")
+            if self.last_significant_event_id is not None
+            else None
+        )
+        self.fatigue_reason = (
+            _string(self.fatigue_reason, "self_state.fatigue_reason", allow_empty=True)
+            if self.fatigue_reason is not None
+            else None
+        )
+        self.updated_at = _string(self.updated_at, "self_state.updated_at", allow_empty=True)
+        self.version = int(self.version)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> SelfState:
+        data = _mapping(data, "self_state")
+        return cls(
+            energy=data.get("energy", 0.85),
+            mood_baseline=data.get("mood_baseline", "平静"),
+            active_goals=list(data.get("active_goals", [])),
+            self_narrative=data.get("self_narrative", ""),
+            last_significant_event_id=data.get("last_significant_event_id"),
+            fatigue_reason=data.get("fatigue_reason"),
+            updated_at=data.get("updated_at", ""),
+            version=data.get("version", 1),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "energy": self.energy,
+            "mood_baseline": self.mood_baseline,
+            "active_goals": list(self.active_goals),
+            "self_narrative": self.self_narrative,
+            "last_significant_event_id": self.last_significant_event_id,
+            "fatigue_reason": self.fatigue_reason,
+            "updated_at": self.updated_at,
+            "version": self.version,
+        }
+
+
+# ── v0.8.0 DispositionSeed ────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class DispositionSeed:
+    """倾向种子：「种子 → 现行 → 再熏习」闭环的基础单元。
+
+    存储为 separate table，每 peer 上限 15 条。
+    """
+
+    id: str
+    statement: str                     # 「面对压力时倾向于先倾诉再行动」
+    strength: float = 0.5             # 0.0–1.0
+    evidence_ids: list[str] = field(default_factory=list)
+    last_activated: str | None = None
+    activation_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+    archived: bool = False
+
+    def __post_init__(self) -> None:
+        self.id = _string(self.id, "disposition.id")
+        if len(self.id) > 64:
+            raise MemoryValidationError("disposition.id must not exceed 64 characters")
+        self.statement = _string(self.statement, "disposition.statement")
+        if not self.statement:
+            raise MemoryValidationError("disposition.statement must not be empty")
+        if len(self.statement) > 200:
+            raise MemoryValidationError("disposition.statement must not exceed 200 characters")
+        self.strength = float(self.strength)
+        if not (0.0 <= self.strength <= 1.0):
+            raise MemoryValidationError("disposition.strength must be in [0, 1]")
+        self.evidence_ids = _string_list(self.evidence_ids, "disposition.evidence_ids")
+        self.last_activated = (
+            _string(self.last_activated, "disposition.last_activated")
+            if self.last_activated is not None
+            else None
+        )
+        self.activation_count = int(self.activation_count)
+        self.created_at = _string(self.created_at, "disposition.created_at", allow_empty=True)
+        self.updated_at = _string(self.updated_at, "disposition.updated_at", allow_empty=True)
+        self.archived = bool(self.archived)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> DispositionSeed:
+        data = _mapping(data, "disposition")
+        return cls(
+            id=data["id"],
+            statement=data["statement"],
+            strength=data.get("strength", 0.5),
+            evidence_ids=list(data.get("evidence_ids", [])),
+            last_activated=data.get("last_activated"),
+            activation_count=data.get("activation_count", 0),
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+            archived=data.get("archived", False),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "statement": self.statement,
+            "strength": self.strength,
+            "evidence_ids": list(self.evidence_ids),
+            "last_activated": self.last_activated,
+            "activation_count": self.activation_count,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "archived": self.archived,
+        }

@@ -14,12 +14,15 @@ from uuid import uuid4
 from .embeddings import VectorEntry
 from .models import (
     CoreMemory,
+    DispositionSeed,
     EpisodicMemory,
     Memory,
     MemoryAssociation,
+    MemoryValidationError,
     NarrativeLayer,
     ProactiveConfig,
     RelationshipModel,
+    SelfState,
     SemanticMemory,
     StyleMemory,
     UserSchema,
@@ -252,6 +255,29 @@ class MemoryStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_session_log_status
                     ON session_log(status, created_at);
+
+                CREATE TABLE IF NOT EXISTS self_state (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    data TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS disposition_seeds (
+                    id TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    strength REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_disposition_strength
+                    ON disposition_seeds(archived, strength DESC);
+
+                CREATE TABLE IF NOT EXISTS life_snapshots (
+                    id TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    reason TEXT DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_life_snapshots_time
+                    ON life_snapshots(created_at DESC);
                 """
             )
 
@@ -292,6 +318,116 @@ class MemoryStore:
 
     def save_core(self, core: CoreMemory) -> None:
         self.apply_batch(WriteBatch(core=core, operation="core.write"))
+
+    # ── v0.7.0 SelfState ──────────────────────────────────────────
+
+    def get_self_state(self) -> SelfState:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM self_state WHERE singleton = 1"
+            ).fetchone()
+        return (
+            SelfState.from_dict(json.loads(self._decrypt(row["data"])))
+            if row
+            else SelfState()
+        )
+
+    def save_self_state(self, state: SelfState) -> None:
+        payload = self._encrypt(json.dumps(state.to_dict(), ensure_ascii=False))
+        with self._lock:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO self_state (singleton, data) VALUES (1, ?)",
+                (payload,),
+            )
+
+    # ── v0.8.0 DispositionSeed ─────────────────────────────────────
+
+    _DISPOSITION_MAX_COUNT = 15
+
+    def list_dispositions(self, include_archived: bool = False) -> list[DispositionSeed]:
+        clause = "" if include_archived else "WHERE archived = 0"
+        with self._lock:
+            rows = self._connection.execute(
+                f"SELECT data FROM disposition_seeds {clause} ORDER BY strength DESC"
+            ).fetchall()
+        return [DispositionSeed.from_dict(json.loads(self._decrypt(row["data"]))) for row in rows]
+
+    def get_disposition(self, seed_id: str) -> DispositionSeed | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM disposition_seeds WHERE id = ?", (seed_id,)
+            ).fetchone()
+        return DispositionSeed.from_dict(json.loads(self._decrypt(row["data"]))) if row else None
+
+    def save_disposition(self, seed: DispositionSeed) -> None:
+        active = len(self.list_dispositions())
+        existing = self.get_disposition(seed.id)
+        if existing is None and active >= self._DISPOSITION_MAX_COUNT:
+            raise MemoryValidationError(
+                f"disposition_seeds limit reached ({self._DISPOSITION_MAX_COUNT}); "
+                f"archive stale seeds first"
+            )
+        payload = self._encrypt(json.dumps(seed.to_dict(), ensure_ascii=False))
+        with self._lock:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO disposition_seeds (id, data, archived, strength) "
+                "VALUES (?, ?, ?, ?)",
+                (seed.id, payload, int(seed.archived), seed.strength),
+            )
+
+    def archive_disposition(self, seed_id: str) -> DispositionSeed | None:
+        seed = self.get_disposition(seed_id)
+        if seed is None:
+            return None
+        seed.archived = True
+        seed.updated_at = to_iso8601(utc_now())
+        self.save_disposition(seed)
+        return seed
+
+    def delete_disposition(self, seed_id: str) -> bool:
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM disposition_seeds WHERE id = ?", (seed_id,)
+            )
+        return cursor.rowcount > 0
+
+    # ── v0.9.0 life_snapshots ────────────────────────────────────
+
+    def save_life_snapshot(self, snapshot_id: str, state: SelfState,
+                           reason: str = "") -> None:
+        """保存一次 SelfState 人生快照。"""
+        payload = self._encrypt(json.dumps(state.to_dict(), ensure_ascii=False))
+        now = to_iso8601(utc_now())
+        with self._lock:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO life_snapshots (id, data, created_at, reason) "
+                "VALUES (?, ?, ?, ?)",
+                (snapshot_id, payload, now, reason),
+            )
+
+    def get_life_snapshot(self, snapshot_id: str) -> SelfState | None:
+        """读取指定人生快照。"""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM life_snapshots WHERE id = ?", (snapshot_id,)
+            ).fetchone()
+        return (
+            SelfState.from_dict(json.loads(self._decrypt(row["data"])))
+            if row else None
+        )
+
+    def list_life_snapshots(self) -> list[dict]:
+        """列出所有人生快照（摘要信息）。"""
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT id, created_at, reason FROM life_snapshots ORDER BY created_at DESC"
+            ).fetchall()
+        return [
+            {"id": r["id"], "created_at": r["created_at"], "reason": r["reason"]}
+            for r in rows
+        ]
+
+    # ── existing methods ──────────────────────────────────────────
 
     def get_semantic(self, memory_id: str) -> SemanticMemory | None:
         row = self._connection.execute(

@@ -30,6 +30,7 @@ from .models import (
     ActiveThread,
     CoreMemory,
     CoreMemoryLimitError,
+    DispositionSeed,
     EpisodicMemory,
     Identity,
     MEMORY_VIEWS,
@@ -38,6 +39,7 @@ from .models import (
     NarrativeLayer,
     ProactiveConfig,
     RelationshipModel,
+    SelfState,
     SemanticMemory,
     StyleMemory,
     UserSchema,
@@ -57,6 +59,7 @@ __all__ = [
     "ConversationMessage",
     "CoreMemory",
     "CoreMemoryLimitError",
+    "DispositionSeed",
     "EmbeddingProvider",
     "EmotionUpdate",
     "EpisodicCandidate",
@@ -84,6 +87,7 @@ __all__ = [
     "RelationshipModel",
     "RetrievalResult",
     "ScoredMemory",
+    "SelfState",
     "SemanticCandidate",
     "SemanticMemory",
     "SessionTracker",
@@ -103,4 +107,4 @@ __all__ = [
     "is_unresolved_episode",
 ]
 
-__version__ = "0.6.0"
+__version__ = "0.10.0"

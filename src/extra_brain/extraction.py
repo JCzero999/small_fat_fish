@@ -427,6 +427,18 @@ class OpenAICompatibleExtractor:
             base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         )
 
+    @classmethod
+    def from_config(cls, config: dict[str, str]) -> OpenAICompatibleExtractor:
+        """从配置字典创建（优先 user_config.json，回退环境变量）。"""
+        api_key = config.get("api_key", "").strip() or os.environ.get("DEEPSEEK_API_KEY", "")
+        if not api_key:
+            raise ExtractionError("api_key not found in config or DEEPSEEK_API_KEY env var")
+        return cls(
+            api_key=api_key,
+            model=config.get("model", "deepseek-chat"),
+            base_url=config.get("base_url", "https://api.deepseek.com"),
+        )
+
     def extract(self, prompt: str) -> ExtractionResult:
         request = Request(
             f"{self.base_url}/chat/completions",

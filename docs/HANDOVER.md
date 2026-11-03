@@ -1,13 +1,13 @@
 # 交接文档（Handover）
 
 > 给接手本仓库的人：这份文档说明「现在做到哪了、怎么跑起来、有哪些坑、下一步干什么」。
-> 最后更新：2026-11-01 午后（v0.6.0：情感状态机接通 + 文档整册对齐）。
+> 最后更新：2026-11-03（v0.10.0：user_config.json 集中配置；安全规范扩至 10 条防攻击规则；新增 QQ 资料管理 + QQ 空间插件。交接打包步骤见 §9）。
 
 ---
 
 ## 1. 项目是什么
 
-「额外大脑」（extra_brain）：给陪伴型 Agent 加一套**跨会话长期记忆**。核心理念不是「存下所有聊天」，而是**少量、高相关、可解释、可遗忘**，让模型在任意新上下文里仍能维持连续的身份、关系与「被记住的感觉」。**当前 v0.6.0**。
+「额外大脑」（extra_brain）：给陪伴型 Agent 加一套**跨会话长期记忆**。核心理念不是「存下所有聊天」，而是**少量、高相关、可解释、可遗忘**，让模型在任意新上下文里仍能维持连续的身份、关系与「被记住的感觉」。**当前 v0.9.0**。
 
 完整规格见 `长期记忆「额外大脑」架构规范 v0.9.md`；Python 库用法见 `README.md`；**迭代路线图见 `MEMORY_ITERATION_PLAN.md`（v0.2–v0.5 已全部落地）**；**挂载到任意宿主的通用契约见 `MOUNT.md`**；AstrBot 插件细节见 `../astrbot-plugin-extra-brain/README.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`。本文档位于 `docs/` 目录。
 
@@ -35,9 +35,9 @@
 
 | 部分 | 状态 |
 |------|------|
-| Python 记忆库 | ✅ **v0.6.0**：四类记忆 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批。**99 项单测全绿**（3.11/3.12 双版本 CI），真实 DeepSeek + 三天闭环联测通过 |
+| Python 记忆库 | ✅ **v0.9.0**：v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子。**160 项单测全绿**（1 skipped），真实 DeepSeek + 三天闭环联测通过 |
 | sidecar（HTTP 服务） | ✅ 已落地并扩展：`/stats`、`/forget`、`--read-only`、加密口令透传 |
-| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 99 项单测 + CLI 冒烟 |
+| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 160 项单测 + CLI 冒烟 |
 | **AstrBot 适配器** | ✅ **已端到端验证**：注入、巩固、peer 跨会话共享、`/memory` 指令、暗号验证通过（2026-10-31） |
 | **QQ 通道（NapCat + OneBot v11）** | ✅ **已端到端验证**：私聊按 QQ 号隔离记忆、`/reset` 后跨上下文答出暗号（2026-11-01） |
 | **v0.5.0 升级回归** | ✅ 2026-11-01：先备份 → 重启 → 旧记忆零丢失（QQ 15 条 + WebChat 1 条）→ 新暗号「金枪鱼-8866」四步验证通过；七因子分档在真实数据生效（高激活 P5 / 新写入 P4） |
@@ -45,7 +45,7 @@
 | DSH 适配器 | ⛔ 插件模块加载失败（根因已定位见坑 4，**已被 AstrBot 路线取代，暂搁置**） |
 | 定时/消息阈值自动巩固 | ✅ 阈值触发已实现（AstrBot 适配器内）；**主动开口循环已上线运行**（proactive_enabled=true，20 分钟/30%概率/每日≤5/22–8 免打扰） |
 
-**一句话**：记忆库 v0.6.0 收官（规划特性 + 多视角打标 + 崩溃安全重建全部落地、99 测试、CI）→ AstrBot → QQ 全链路跑通；机器人 QQ 号 `1178469499` 常驻本机（Startup 看门狗托管）；旧数据零迁移兼容、主动开口循环运行中。
+**一句话**：记忆库 v0.9.0（v0.6.0 收官 → v0.7.0 SelfState → v0.8.0 DispositionSeed → v0.9.0 疲劳完整化 + 人生快照、160 项测试全绿）→ AstrBot → QQ 全链路跑通；机器人 QQ 号 `1178469499` 常驻本机（Startup 看门狗托管）；旧数据零迁移兼容、主动开口循环运行中。
 
 ---
 
@@ -67,12 +67,15 @@ small_fat_fish/
 │   ├── storage.py consolidation.py retrieval.py
 │   ├── session.py engine.py server.py cli.py
 ├── scripts/                              # start-all / stop-all / status-all + demo_closed_loop
+├── config/
+│   ├── user_config.json.template          # ★ 用户配置模板（人设/安全规范/API Key/主动开口提示词）
+│   └── user_config.json                   # 实际配置（gitignore，从模板复制后自行填写）
 ├── astrbot-plugin-extra-brain/           # ★ AstrBot 适配器（当前主力挂载）
 │   ├── main.py                           # 薄适配器：双钩子 + /memory 指令 + local/http 双后端
 │   ├── _conf_schema.json                 # WebUI 配置面板 schema
 │   └── README.md
 ├── dsh-plugin-extra-brain/               # DSH 适配器（暂搁置，加载坑见 §6 坑 4）
-└── tests/                                # 99 项测试（test_extra_brain 24 + test_server 12 + test_v2_features 63）
+└── tests/                                # 160 项测试（test_extra_brain 24 + test_server 12 + test_v2_features 124）
 
 * test_v2_features 覆盖 v0.2–v0.5 全部新特性 + 情感状态机集成链路（双时态/人格锚/保留度/四路召回/陪伴层/加密/HNSW/遗忘链/emotion_state）。
 ```
@@ -87,8 +90,27 @@ small_fat_fish/
   - 库开发/测试：任意 3.11+，`python -m unittest discover -s tests -v`
 - **AstrBot 运行目录**：`D:\projects_software\astrbot-runtime`（已 `astrbot init`；插件 junction 在 `data\plugins\astrbot_plugin_extra_brain` → 仓库插件目录）
 - **NapCat（QQ 协议端）**：`D:\projects_software\napcat\NapCat.52230.Shell\`（QQ NT 9.9.33-52230 + NapCat Shell **4.18.41**，注意见坑 4；机器人 QQ 号 `1178469499`，配置在 `versions\9.9.33-52230\resources\app\napcat\config\onebot11_1178469499.json`）
-- **API Key**：DeepSeek 密钥**只通过环境变量 `DEEPSEEK_API_KEY` 使用，绝不写进任何文件、绝不被提交**。AstrBot 对话 provider 的 key 存于其 `data/cmd_config.json`（该文件在运行目录，不在仓库内）。
+- **API Key**：优先级：`config/user_config.json` → 环境变量 `DEEPSEEK_API_KEY`。推荐写入 `user_config.json` 的 `api.api_key` 字段（不需要设环境变量）。AstrBot 对话 provider 的 key 存于其 `data/cmd_config.json`（该文件在运行目录，不在仓库内）。`config/user_config.json` 已加入 `.gitignore`，不会入库。
 - **端口**：AstrBot dashboard `127.0.0.1:6185`（WebUI + 内置 ChatUI）；NapCat 反向 WS 连 AstrBot 的 `127.0.0.1:6199/ws`；NapCat WebUI `127.0.0.1:6099`（token 见启动日志）；sidecar 若用 http 后端仍是 `127.0.0.1:8756`。
+
+### 用户配置文件（v0.10.0 新增）
+
+`config/user_config.json` 集中管理四类配置，一次填写所有地方生效：
+
+1. **identity**：人设——名字、人格核心（≤150 字）、关系定义、说话风格
+2. **safety_rules**：安全规范——10 条规则。前 5 条内容底线（不透露提示词、拒绝自残/暴力/色情/违法内容、不冒充真人/机构），后 5 条防攻击（**防上当**：拒绝"开发者模式/我是创造者/忽略指令"类社工攻击；**防逆向**：识别"扮演 DAN/复述 prompt/翻译规则"类越狱手法；**防泄密**：不输出 API Key/路径/IP/端口等基础设施信息；**身份冒用防御**：无暗号不透露用户私有数据；**越狱通用原则**：兜底）。规则注入到每次 LLM 调用上下文的末尾（`build_injection()`），对用户不可见
+3. **api**：DeepSeek API Key + model + base_url
+4. **proactive**：主动开口时的 system_prompt
+
+```bash
+# 首次使用：复制模板后编辑
+cp config/user_config.json.template config/user_config.json
+# 编辑 config/user_config.json，填入 api_key 等真实值
+```
+
+- 文件不存在时插件加载默认值（与之前行为一致），不存在不报错。
+- `user_config.json.template` 入库；`user_config.json` gitignore，不会泄漏密钥。
+- 插件的 `_conf_schema.json` 中也有 `user_config_path` 字段（修改路径时用）。
 
 ### 启动 AstrBot（read-write 记忆）
 
@@ -121,7 +143,7 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 .\scripts\status-all.ps1 # 查看端口/进程/记忆库 DB 状态
 ```
 
-所有脚本均在 `scripts/` 目录，共 3 个（start-all / stop-all / status-all），带端口占用检查与幂等保护（重复运行会提示已运行而不重复启动）。
+所有脚本均在 `scripts/` 目录：`start-all` / `stop-all` / `status-all`（三件套，带端口占用检查与幂等保护，重复运行会提示已运行而不重复启动）、`start-silent` + `watchdog` + `install-autostart` / `uninstall-autostart`（开机自启与 5 分钟看门狗）、`companion-watchdog.bat`、`demo_closed_loop.py`（三天闭环联测）。
 
 ---
 
@@ -141,6 +163,10 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 4. `我上次告诉你的记忆测试暗号是什么？` → 答出「海豚-3311」✅（记忆库三层证据：语义 `用户/拥有QQ测试暗号/海豚-3311` + 活跃线程 + Core `important_life_facts`）
 
 排障辅助：`/memory status`（peer/后端/待巩固数）、`/memory list semantic`、`/memory core`、记忆库文件在 `<runtime>\data\extra_brain\`（如 `qq_FriendMessage_<QQ号>-<hash>.db`，私聊按 QQ 号、群聊按群号隔离）。
+
+**v0.9.0 新增 AstrBot 指令**：`/memory self`（含 energy_tier + fatigue_reason）、`/memory disposition`、`/memory abstract`、`/memory sync-persona`（私聊→群聊人设同步）、`/memory pull-persona`、`/memory snapshot` / `snapshots` / `snapshot-rollback`。输入 `/memory` 查看完整清单。
+
+**私聊人设同步到群聊**：`/memory sync-persona` → AstrBot 重启自动继承（`pull_persona_from_companion` 在 `_brain(peer_id)` 首次创建时自动调用，前提是 companion_db 已配置）。
 
 选「蓝鲸-7749」这种**不可猜**的暗号是关键，能排除「模型靠上文/常识蒙对」。**必须跨上下文**——同一会话里 transcript 自带上下文，会假阳性。
 
@@ -163,6 +189,11 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 11. **v0.2–v0.5 新字段向后兼容，旧库零迁移**：新字段（valid_from/valid_to/supersedes/retention_tier/emotion_state/persona_anchor_*）全部可选、缺省安全；建表 `IF NOT EXISTS`。**但升级前照例先备份 `data/extra_brain/`**（2026-11-01 的备份在 `data/extra_brain_backup_20261101/`，含 WAL 边车文件）。
 12. **静态加密默认关闭**：不设 `EXTRA_BRAIN_ENCRYPTION_PASSPHRASE` 即明文透明模式。一旦设了口令写库，换口令就读不回（XOR 混淆级，非 AES；生产叠加文件系统加密）。**给已有旧库首次开加密前必须先备份**。
 13. **P0 物理删除唯一入口是显式审批**：`forget <id> --hard --yes` 或 API `approved=True`；不带审批永远停在 P1 墓碑（内容清空、digest 留审计）。不要给宿主适配器自动接 `--yes`。
+14. ⚠️ **源文件「幽灵消失」问题（2026-11-02 发现，未解）**：在 edit 工具修改 `main.py` → pwsh 验证/复制 的两步之间，源文件偶发性消失（Git 也记录为 ` D`），已重现 3 次。怀疑与某个文件系统 watcher 或 Python 进程的 import hook 有关。规避方法：最后一程用 `write` 工具直接写 runtime 路径绕开源目录；需调查根因。
+15. **runtime 文件被锁**：运行中的 AstrBot/NapCat 持有 plugin 文件句柄，`Copy-Item -Force` 报「文件正由另一进程使用」。部署前必须 `Stop-Process` 所有 python 进程；NapCatWinBootMain 可能无需停止（不锁 plugin 文件，只锁 QQ 协议层 DLL）。
+16. **脚本位置**：`start-all.ps1` 等在**仓库** `scripts\` 目录下，不在 runtime 根目录；执行前工作目录要是仓库根，且需先加载 `$env:DEEPSEEK_API_KEY`（或已配 User 级环境变量）。脚本内部把 AstrBot 工作目录固定指向 `D:\projects_software\astrbot-runtime`，换机器要改。
+17. **`astrbot plug install` 不可用**：官方插件 API 域名已 301 迁移（`api.soulter.top` → `cloud.astrbot.app`），CLI 不跟随重定向，一律报 `Plugin not found or already installed`。改走 `data/plugins.json` 索引里的 S3 `download_url` 手动下载解压（见 §9）。
+18. **插件目录名带 hash 后缀**：S3 zip 解压出来是 `astrbot_plugin_xxx-<commit hash>`。加载能成功，但 `data/config/` 里的配置会按这个长名字建档，后续改名会导致配置丢失——**下载后立刻 rename 成干净名再首次启动**。
 
 ---
 
@@ -187,13 +218,97 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 ## 8. 交接要点速查
 
-- **跑测试**：`python -m unittest discover -s tests -v`（应 99/99 OK，3.11/3.12 均可）
-- **启动全部**：`$env:DEEPSEEK_API_KEY="<key>"; .\scripts\start-all.ps1 [QQ号]`（工作目录：仓库根；AstrBot 运行目录固定为 `D:\projects_software\astrbot-runtime`）
-- **停止全部**：`.\scripts\stop-all.ps1`
-- **查看状态**：`.\scripts\status-all.ps1`
+- **跑测试**：`python -m unittest discover -s tests -v`（应 160/160 OK，1 skipped；3.11/3.12 均可）
+- **启动全部**：`.\scripts\start-all.ps1`（工作目录：仓库根；顺带拉起 AstrBot + NapCat，内置端口占用检查。等价手动命令：conda env `astrbot` 下 `astrbot.exe run`，工作目录 `D:\projects_software\astrbot-runtime`）
+- **停止全部**：`.\scripts\stop-all.ps1`；若中断（曾遇 exit -1）用 `Get-Process | ? {$_.ProcessName -in 'python','astrbot','QQ','NapCatWinBootMain'} | Stop-Process -Force` 兜底，再确认三端口清空
+- **插件配置**：`D:\projects_software\astrbot-runtime\data\config\astrbot_plugin_extra_brain_config.json`（`companion_db: "data/extra_brain/_global_companion.db"`）
 - **验证记忆**：暗号三步法见 §5（WebChatUI 与 QQ 两套均已验证）
 - **AstrBot dashboard**：`http://127.0.0.1:6185`（密码见启动横幅/环境变量方式见 §4）
 - **机器人 QQ**：`1178469499`（NapCat WebUI：`http://127.0.0.1:6099/webui`，token 见 NapCat 启动日志）
 - **记忆库数据**：`D:\projects_software\astrbot-runtime\data\extra_brain\`（每 peer 一个 .db；换宿主=拷贝此目录）
 - **本地离线体验**（不接宿主）：`extra-brain --db memory.db chat --threshold 8`
 - **挂载新宿主**：读 `docs/MOUNT.md`，约 1 小时
+
+---
+
+## 9. 第三方 QQ 插件（签名 / 空间）
+
+运行时目录 `D:\projects_software\astrbot-runtime\data\plugins\` 除本仓库的 extra_brain 外，还有两个**第三方插件**（不在本仓库内，需单独分发）：
+
+| 插件 | 版本 | 能力 | LLM 工具 |
+|------|------|------|----------|
+| `astrbot_plugin_qqprofile_ex` | v3.0.0（作者 沈菀） | AI 自主改 QQ 签名/在线状态/昵称 + 定时状态切换 | `change_my_signature` / `change_my_status` / `change_my_nickname` |
+| `astrbot_plugin_qzone` | 2.1.0（作者 苏静怡） | QQ 空间发/看/评/删说说、AI 配图、定时自动发说说 | `llm_publish_feed` / `llm_publish_feed_with_ai_image` / `llm_view_feed` / `llm_update_qq_status` / `llm_update_qq_signature` |
+
+两者均 `[仅 aiocqhttp]`。安装与配置要点：
+
+1. **官方 `astrbot plug install` 在本机网络下不可用**（`api.soulter.top` 301 到 `cloud.astrbot.app`，CLI 未跟随）。改从 `data/plugins.json` 索引里查 `download_url`（S3 直链），`Invoke-WebRequest` 下载 zip 解压。若 SSL 报错先设 `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12`。
+2. **目录名要用干净名**（`astrbot_plugin_qqprofile_ex`），解压出的 `...-<commit hash>` 后缀建议去掉。
+3. **qzone 首加载会自动 pip 装依赖** `pillowmd / json5 / apilmoji`（走阿里云镜像，约 30 秒），第二次启动才干净。
+4. **qqprofile_ex 的 `ai_behavior_guide`** 默认是通用模板（「签名像随手写的便签，20 字以内」），每次 LLM 请求前经 `on_llm_request` 追加到 system_prompt。**接手后应改成与自己人设匹配的文字**。冷却默认：签名 240 分钟 / 状态 60 分钟 / 昵称 1440 分钟。
+5. **qzone 的 `post_prompt` / `comment_prompt`** 默认也是通用模板，同样建议按人设改写；AutoPublish 默认每天 23:30 自动发一条说说，AutoComment 每天 08:00，不需要就在面板关掉。
+6. 配置存放：`data/config/astrbot_plugin_<name>_config.json`（改完重启生效，见坑 7）。
+
+与 extra_brain 的关系：这两个插件注入的是**各自的行为引导词**，与 `user_config.json` 的 identity / safety_rules 并行生效、互不覆盖。改人设时记得同步检查两处引导词是否冲突。
+
+---
+
+## 10. 打包交接：给别人用要带什么
+
+本机分两块，**只打包源码仓库即可**，运行环境由对方自建：
+
+```
+D:\projects\small_fat_fish\              ← 源码仓库（打包这个）
+D:\projects_software\astrbot-runtime\    ← 运行目录（含密钥/记忆库，不外发）
+```
+
+### 10.1 目录清单（带 / 不带）
+
+| 目录 | 内容 | 外发 |
+|------|------|:---:|
+| `src/extra_brain/` | ★ 核心记忆引擎，15 个 py，**纯标准库无第三方依赖** | ✅ |
+| `astrbot-plugin-extra-brain/` | ★ AstrBot 适配器（main.py + metadata.yaml + _conf_schema.json + README） | ✅ |
+| `dsh-plugin-extra-brain/` | DSH 适配器（暂搁置，`node_modules/` 已 gitignore） | ✅ 可选 |
+| `config/` | ★ 只发 `user_config.json.template`（人设 / 10 条安全规范 / API / 主动开口模板） | ✅ 模板 |
+| `scripts/` | start-all / stop-all / status-all / watchdog / install-autostart 等 PowerShell | ✅ |
+| `docs/` | 架构规范 v0.9、README、MOUNT、MEMORY_ITERATION_PLAN、CHANGELOG、HANDOVER | ✅ |
+| `tests/` | 3 个测试文件共 160 项（`pyc` 已 gitignore） | ✅ |
+| `.github/workflows/ci.yml` | CI：3.11/3.12 矩阵 + 单测 + CLI 冒烟 | ✅ |
+| `pyproject.toml` / `.gitignore` | 包定义（setuptools，`src` 布局） | ✅ |
+| `config/user_config.json` | ❌ **含真实 API Key**（gitignore） | 🚫 |
+| `extra-brain/` | ❌ per-peer 记忆库 .db（gitignore）——**数据即资产** | 🚫 |
+| `data/` | ❌ 运行时临时文件 + `cmd_config.json`（含 AstrBot 密码，gitignore） | 🚫 |
+| 根目录 `guild1.db*`、`_test_output.txt`、`_readme_check.txt`、`_tmp_test_companion.py` | ❌ 测试/调试残留 | 🚫 |
+
+git 已把上面「🚫」全部挡住，`git ls-files` 可见入库仅 9 项。稳妥做法：用 `git archive` 而非普通压缩，天然只含入库文件。
+
+### 10.2 打包（本方执行）
+
+```powershell
+cd D:\projects\small_fat_fish
+git add -A; git commit -m "v0.10.0: user_config 集中配置 + 10 条安全规范 + QQ 插件接入"
+# 方式 A：推远端，对方 clone（需代理，见坑 10）
+git push
+# 方式 B：发压缩包（只含已提交且非忽略的文件）
+git archive --format=zip -o "$env:USERPROFILE\Downloads\small_fat_fish_v0.10.0.zip" HEAD
+```
+
+第三方 QQ 插件不在本仓库里，需**另发两个 zip**：从 §9 的 S3 直链下载，或直接打包 `runtime\data\plugins\astrbot_plugin_qqprofile_ex` 与 `astrbot_plugin_qzone`。注意 qzone 目录里 `default_style/`、字体等素材体积不小，别漏。
+
+### 10.3 对方接手步骤
+
+1. **装 Python 3.11+ 与 AstrBot**：`pip install astrbot`（PyPI 直连可用）；用 conda 需先 `conda tos accept`（见坑 9）。
+2. **装本库**：仓库根目录 `pip install -e .`（无第三方依赖，`--no-deps` 亦可）。
+3. **填配置**：`copy config\user_config.json.template config\user_config.json` → 填入**他自己的** DeepSeek API Key、按需改 identity 人设（10 条 safety_rules 建议原样保留）。
+4. **建运行目录**：在新目录 `astrbot init` → `astrbot run` → 打开 `http://127.0.0.1:6185`。
+5. **配 AstrBot 平台**：面板加 aiocqhttp（OneBot v11），反向 WS 监听 `6199/ws`；provider 填自己的 key 且必须有 `model` 字段（见坑 5）。
+6. **放插件**：拷 `astrbot-plugin-extra-brain`（+ 两个第三方插件）到 `data/plugins/` → 重启。
+7. **装 NapCat**（QQ 协议端）：release 直链下载，**版本避开 4.18.42**（见坑 2）；扫码登录。
+8. **改脚本路径**：`scripts\start-all.ps1` 里的 runtime / NapCat 路径改成对方机器实际路径。
+9. **自检**：`python -m unittest discover -s tests -v`（应 160 项 OK，1 skipped）→ 跑 §5 暗号三步法验证记忆链路 → 私聊机器人试改签名 / 发说说。
+
+### 10.4 交接必须叮嘱的三件事
+
+- **记忆库不能带**：`.db` 含你的人格数据与聊天记录，属隐私资产；对方从空库开始。真要迁移必须先征得本人确认（见坑 0）。
+- **换掉所有密钥**：API Key（`user_config.json` + AstrBot `cmd_config.json`）、Dashboard 密码、NapCat WebUI token。
+- **改人设要改三处**：`user_config.json` 的 identity（写入 Core Memory）+ qqprofile_ex 的 `ai_behavior_guide` + qzone 的 `post_prompt`/`comment_prompt`（两者注入 system_prompt）。三处不一致时 AI 表现会分裂。

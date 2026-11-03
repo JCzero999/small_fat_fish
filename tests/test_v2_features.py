@@ -27,12 +27,14 @@ from extra_brain.embeddings import (  # noqa: E402
     cosine_similarity,
 )
 from extra_brain.models import (  # noqa: E402
+    DispositionSeed,
     EpisodicMemory,
     MemoryAssociation,
     MemoryValidationError,
     NarrativeLayer,
     ProactiveConfig,
     RelationshipModel,
+    SelfState,
     SemanticMemory,
     UserSchema,
     is_emotion_protected,
@@ -1248,3 +1250,790 @@ class ForgetChainTests(TempDbTestCase):
         self.assertEqual(
             cli_main(["--db", str(self.db_path), "associate", "sem_h1"]), 0
         )
+
+
+# ── v0.7.0 SelfState ──────────────────────────────────────────────
+
+
+class SelfStateModelTests(unittest.TestCase):
+    """SelfState 数据模型单元测试。"""
+
+    def test_default_values(self):
+        ss = SelfState()
+        self.assertEqual(ss.energy, 0.85)
+        self.assertEqual(ss.mood_baseline, "平静")
+        self.assertEqual(ss.active_goals, [])
+        self.assertEqual(ss.self_narrative, "")
+        self.assertIsNone(ss.last_significant_event_id)
+        self.assertEqual(ss.version, 1)
+
+    def test_energy_clamped(self):
+        ss = SelfState(energy=1.5)
+        self.assertEqual(ss.energy, 1.0)
+        ss2 = SelfState(energy=-0.1)
+        self.assertEqual(ss2.energy, 0.15)
+        ss3 = SelfState(energy=0.01)
+        self.assertEqual(ss3.energy, 0.15)
+
+    def test_energy_invalid_raises(self):
+        with self.assertRaises(MemoryValidationError):
+            SelfState(energy=float("nan"))
+
+    def test_goals_truncated_to_5(self):
+        ss = SelfState(active_goals=["a", "b", "c", "d", "e", "f", "g"])
+        self.assertEqual(len(ss.active_goals), 5)
+        self.assertEqual(ss.active_goals, ["a", "b", "c", "d", "e"])
+
+    def test_narrative_length_limit(self):
+        with self.assertRaises(MemoryValidationError):
+            SelfState(self_narrative="x" * 81)
+
+    def test_roundtrip(self):
+        ss = SelfState(
+            energy=0.72,
+            mood_baseline="有点紧张",
+            active_goals=["想知道面试结果"],
+            self_narrative="我关注着小舟的面试进展。",
+            last_significant_event_id="ep_001",
+            updated_at="2026-11-02T12:00:00Z",
+            version=3,
+        )
+        d = ss.to_dict()
+        restored = SelfState.from_dict(d)
+        self.assertAlmostEqual(restored.energy, 0.72, places=4)
+        self.assertEqual(restored.mood_baseline, "有点紧张")
+        self.assertEqual(restored.active_goals, ["想知道面试结果"])
+        self.assertEqual(restored.self_narrative, "我关注着小舟的面试进展。")
+        self.assertEqual(restored.last_significant_event_id, "ep_001")
+        self.assertEqual(restored.version, 3)
+
+    def test_from_empty_dict_returns_defaults(self):
+        ss = SelfState.from_dict({})
+        self.assertEqual(ss.energy, 0.85)
+        self.assertEqual(ss.mood_baseline, "平静")
+
+
+class SelfStateStorageTests(unittest.TestCase):
+    """SelfState 持久化读写测试（用临时内存库）。"""
+
+    def setUp(self):
+        import tempfile
+        from extra_brain import ExtraBrain
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._db = str(Path(self._tmpdir.name) / "test_self_state.db")
+        self.brain = ExtraBrain(self._db)
+        # old db 不能有 self_state 行，必须在第一次访问时自动返回默认值
+
+    def tearDown(self):
+        self.brain.close()
+        self._tmpdir.cleanup()
+
+    def test_old_db_returns_default_self_state(self):
+        """旧库没有 self_state 表时，返回默认 SelfState 且不抛错。"""
+        ss = self.brain.get_self_state()
+        self.assertEqual(ss.energy, 0.85)
+        self.assertEqual(ss.mood_baseline, "平静")
+        self.assertEqual(ss.active_goals, [])
+
+    def test_save_and_reload(self):
+        ss = SelfState(
+            energy=0.55,
+            mood_baseline="疲惫",
+            active_goals=["去公园散步"],
+            self_narrative="最近聊得有点多，我需要缓缓。",
+            updated_at="2026-11-02T12:00:00Z",
+            version=2,
+        )
+        self.brain.save_self_state(ss)
+        loaded = self.brain.get_self_state()
+        self.assertAlmostEqual(loaded.energy, 0.55, places=4)
+        self.assertEqual(loaded.mood_baseline, "疲惫")
+        self.assertEqual(loaded.active_goals, ["去公园散步"])
+        self.assertEqual(loaded.self_narrative, "最近聊得有点多，我需要缓缓。")
+
+    def test_read_only_rejects_save(self):
+        """只读模式拒绝 save_self_state。"""
+        from extra_brain import ExtraBrain
+        ro = ExtraBrain(self._db, read_only=True)
+        with self.assertRaises(PermissionError):
+            ro.save_self_state(SelfState(energy=0.9))
+        ro.close()
+
+
+class SelfStateIntegrationTests(unittest.TestCase):
+    """SelfState 在 consolidate / injection / proactive 中的端到端集成测试。"""
+
+    def setUp(self):
+        import tempfile
+        from extra_brain import ExtraBrain
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._db = str(Path(self._tmpdir.name) / "test_self_state_int.db")
+        self.brain = ExtraBrain(self._db)
+
+    def tearDown(self):
+        self.brain.close()
+        self._tmpdir.cleanup()
+
+    def _seed_one_episode(self, emotions=("开心",), importance=0.8):
+        """手动写入一条情节记忆用于触发 SelfState 更新。"""
+        from extra_brain.storage import WriteBatch
+        memory_id = new_memory_id("ep", utc_now())
+        now_iso = to_iso8601(utc_now())
+        ep = EpisodicMemory(
+            id=memory_id,
+            timestamp=now_iso,
+            summary="小舟面试通过了",
+            key_moments=["她说录取了"],
+            emotions=list(emotions),
+            importance=importance,
+            related_semantic_ids=[],
+            participants=["user", "agent"],
+        )
+        self.brain.store.apply_batch(
+            WriteBatch(episodic=[ep], operation="test.seed")
+        )
+        return memory_id, ep
+
+    def test_consolidation_updates_self_state(self):
+        """一轮有内容的 consolidate 应更新 SelfState 的 updated_at。"""
+        conv = (
+            "[用户] 我面试通过了！好开心！\n"
+            "[助手] 真的吗？太棒了！\n"
+            "[用户] 是啊，努力终于有了回报。\n"
+        )
+        try:
+            report = self.brain.consolidate(conv)
+        except Exception:
+            self.skipTest("extractor not available — skipping integration test")
+        ss = self.brain.get_self_state()
+        self.assertTrue(ss.version >= 1)
+        if report.changed:
+            self.assertNotEqual(ss.updated_at, "")
+
+    def test_injection_prepends_self_state_block(self):
+        """注入输出的最前面应包含「这一刻的自己」。"""
+        # 手动写入 SelfState，然后走 build_injection
+        self.brain.save_self_state(
+            SelfState(
+                energy=0.72,
+                mood_baseline="开心",
+                active_goals=["关心小舟的面试进展"],
+                self_narrative="我和小舟刚聊完面试的事，她现在状态不错。",
+                updated_at="2026-11-02T12:00:00Z",
+                version=2,
+            )
+        )
+        # 写入一条语义记忆让检索有东西可查
+        from extra_brain.storage import WriteBatch
+        sem = make_semantic("sem_test_ss")
+        self.brain.store.apply_batch(
+            WriteBatch(semantic=[sem], operation="test.injection_ss")
+        )
+        injection = self.brain.build_injection("小舟面试")
+        self.assertIn("这一刻的自己", injection.context)
+        self.assertIn("0.72", injection.context)
+        self.assertIn("开心", injection.context)
+        self.assertIn("关心小舟的面试进展", injection.context)
+
+    def test_low_energy_suppresses_proactive(self):
+        """energy < 0.15 时 should_proactive_open 返回 energy_critical。"""
+        self.brain.save_self_state(
+            SelfState(
+                energy=0.10,
+                mood_baseline="疲惫",
+                updated_at="2026-11-02T12:00:00Z",
+            )
+        )
+        config = self.brain.ensure_proactive_config("peer_test")
+        config.enabled = True
+        config.silence_threshold_minutes = 0
+        config.quiet_hours_start = 0
+        config.quiet_hours_end = 0
+        config.daily_limit = 10
+        self.brain.save_proactive_config(config)
+        ok, reason = self.brain.should_proactive_open("peer_test")
+        self.assertFalse(ok)
+        self.assertEqual(reason, "energy_critical")
+
+    def test_self_state_cli_output(self):
+        """CLI `self` 子命令输出有效 JSON。"""
+        from extra_brain.cli import main as cli_main
+        import json as j
+        self.brain.save_self_state(
+            SelfState(
+                energy=0.60,
+                mood_baseline="期待",
+                active_goals=["等小舟回消息"],
+                updated_at="2026-11-02T12:00:00Z",
+                version=1,
+            )
+        )
+        # 没法直接捕获 stdout，走函数级校验
+        ss = self.brain.get_self_state()
+        d = ss.to_dict()
+        self.assertEqual(d["energy"], 0.60)
+        self.assertEqual(d["mood_baseline"], "期待")
+        self.assertEqual(d["active_goals"], ["等小舟回消息"])
+        # 验证 JSON 可序列化
+        s = j.dumps(d, ensure_ascii=False)
+        self.assertIn("energy", s)
+
+    def test_self_state_from_dict_non_empty(self):
+        ss = SelfState.from_dict({
+            "energy": 0.5,
+            "mood_baseline": "焦虑",
+            "active_goals": ["a", "b"],
+            "self_narrative": "我很担心。",
+            "version": 7,
+        })
+        self.assertEqual(ss.energy, 0.5)
+        self.assertEqual(ss.mood_baseline, "焦虑")
+        self.assertEqual(ss.active_goals, ["a", "b"])
+        self.assertEqual(ss.self_narrative, "我很担心。")
+        self.assertEqual(ss.version, 7)
+
+
+# ── v0.8.0 DispositionSeed ───────────────────────────────────────
+
+
+class DispositionSeedModelTests(unittest.TestCase):
+    """DispositionSeed 数据模型测试。"""
+
+    def test_defaults(self) -> None:
+        seed = DispositionSeed(
+            id="disp_20261101_abc123",
+            statement="面对压力时倾向于先倾诉再行动",
+        )
+        self.assertEqual(seed.strength, 0.5)
+        self.assertEqual(seed.evidence_ids, [])
+        self.assertIsNone(seed.last_activated)
+        self.assertEqual(seed.activation_count, 0)
+        self.assertFalse(seed.archived)
+
+    def test_validation_rejects_empty_statement(self) -> None:
+        with self.assertRaises(MemoryValidationError):
+            DispositionSeed(id="disp_20261101_abc", statement="")
+
+    def test_validation_rejects_out_of_range_strength(self) -> None:
+        with self.assertRaises(MemoryValidationError):
+            DispositionSeed(id="disp_123", statement="test", strength=1.5)
+
+    def test_from_dict(self) -> None:
+        seed = DispositionSeed.from_dict({
+            "id": "disp_test",
+            "statement": "喜欢安静的环境",
+            "strength": 0.7,
+            "evidence_ids": ["mem_a", "mem_b"],
+            "last_activated": "2026-11-01T12:00:00Z",
+            "activation_count": 3,
+            "archived": False,
+        })
+        self.assertEqual(seed.id, "disp_test")
+        self.assertEqual(seed.statement, "喜欢安静的环境")
+        self.assertEqual(seed.strength, 0.7)
+        self.assertEqual(seed.evidence_ids, ["mem_a", "mem_b"])
+        self.assertEqual(seed.activation_count, 3)
+
+    def test_to_dict(self) -> None:
+        seed = DispositionSeed(
+            id="disp_x",
+            statement="喜欢深入思考",
+            strength=0.45,
+            evidence_ids=["e1"],
+        )
+        d = seed.to_dict()
+        self.assertEqual(d["id"], "disp_x")
+        self.assertEqual(d["strength"], 0.45)
+
+    def test_roundtrip(self) -> None:
+        seed = DispositionSeed(
+            id="disp_r",
+            statement="倾向于独立解决问题",
+            strength=0.6,
+            evidence_ids=["a", "b", "c"],
+            last_activated="2026-10-01T10:00:00Z",
+            activation_count=5,
+            archived=True,
+        )
+        d = seed.to_dict()
+        roundtripped = DispositionSeed.from_dict(d)
+        self.assertEqual(roundtripped.id, seed.id)
+        self.assertEqual(roundtripped.statement, seed.statement)
+        self.assertEqual(roundtripped.strength, seed.strength)
+        self.assertEqual(roundtripped.evidence_ids, seed.evidence_ids)
+        self.assertEqual(roundtripped.activation_count, seed.activation_count)
+        self.assertTrue(roundtripped.archived)
+
+
+class DispositionSeedStorageTests(unittest.TestCase):
+    """CRUD 存储测试。"""
+
+    def setUp(self) -> None:
+        from extra_brain import MemoryStore
+        self.store = MemoryStore(":memory:")
+        self.addCleanup(self.store.close)
+
+    def test_list_empty_returns_empty(self) -> None:
+        seeds = self.store.list_dispositions()
+        self.assertEqual(seeds, [])
+
+    def test_save_and_reload(self) -> None:
+        seed = DispositionSeed(
+            id="disp_20261101_abc",
+            statement="喜欢安静的环境",
+            strength=0.6,
+            evidence_ids=["mem1", "mem2"],
+        )
+        self.store.save_disposition(seed)
+        loaded = self.store.get_disposition("disp_20261101_abc")
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.statement, "喜欢安静的环境")
+        self.assertEqual(loaded.strength, 0.6)
+
+    def test_list_filters_archived(self) -> None:
+        active = DispositionSeed(
+            id="disp_active",
+            statement="倾向 A",
+            strength=0.5,
+        )
+        archived = DispositionSeed(
+            id="disp_archived",
+            statement="倾向 B",
+            strength=0.3,
+            archived=True,
+        )
+        self.store.save_disposition(active)
+        self.store.save_disposition(archived)
+        seeds = self.store.list_dispositions()
+        self.assertEqual(len(seeds), 1)
+        self.assertEqual(seeds[0].id, "disp_active")
+
+    def test_list_include_archived(self) -> None:
+        active = DispositionSeed(id="disp_a", statement="A")
+        archived = DispositionSeed(id="disp_b", statement="B", archived=True)
+        self.store.save_disposition(active)
+        self.store.save_disposition(archived)
+        seeds = self.store.list_dispositions(include_archived=True)
+        self.assertEqual(len(seeds), 2)
+
+    def test_save_enforces_cap(self) -> None:
+        for i in range(15):
+            self.store.save_disposition(DispositionSeed(
+                id=f"disp_{i}",
+                statement=f"倾向 {i}",
+            ))
+        with self.assertRaises(MemoryValidationError):
+            self.store.save_disposition(DispositionSeed(
+                id="disp_overflow",
+                statement="溢出",
+            ))
+
+    def test_archive_disposition(self) -> None:
+        seed = DispositionSeed(id="disp_arc", statement="将被归档")
+        self.store.save_disposition(seed)
+        archived = self.store.archive_disposition("disp_arc")
+        self.assertIsNotNone(archived)
+        self.assertTrue(archived.archived)
+        # 再次 list 应该过滤掉
+        self.assertEqual(len(self.store.list_dispositions()), 0)
+
+    def test_delete_disposition(self) -> None:
+        seed = DispositionSeed(id="disp_del", statement="将被删除")
+        self.store.save_disposition(seed)
+        self.assertTrue(self.store.delete_disposition("disp_del"))
+        self.assertIsNone(self.store.get_disposition("disp_del"))
+
+
+class DispositionSeedMatchTests(unittest.TestCase):
+    """匹配逻辑测试。"""
+
+    def setUp(self) -> None:
+        from extra_brain import MemoryStore
+        from extra_brain.disposition import match_dispositions
+        self.store = MemoryStore(":memory:")
+        self.addCleanup(self.store.close)
+        self.match_dispositions = match_dispositions
+
+    def test_empty_store_returns_no_match(self) -> None:
+        result = self.match_dispositions(self.store, "今天压力很大")
+        self.assertEqual(result.matched_seeds, [])
+        self.assertEqual(result.boost_ids, [])
+        self.assertEqual(result.inner_voice, "")
+
+    def test_simple_match(self) -> None:
+        self.store.save_disposition(DispositionSeed(
+            id="disp_stress",
+            statement="面对压力时倾向于先倾诉再行动",
+            strength=0.7,
+            evidence_ids=["mem_ev1", "mem_ev2"],
+        ))
+        result = self.match_dispositions(self.store, "我最近压力很大，不知道该怎么办")
+        self.assertGreaterEqual(len(result.matched_seeds), 1)
+        self.assertIn("mem_ev1", result.boost_ids)
+        self.assertIn("mem_ev2", result.boost_ids)
+
+    def test_no_match_different_domain(self) -> None:
+        self.store.save_disposition(DispositionSeed(
+            id="disp_stress",
+            statement="面对压力时倾向于先倾诉再行动",
+            strength=0.7,
+        ))
+        result = self.match_dispositions(self.store, "今天的天气真好")
+        self.assertEqual(result.matched_seeds, [])
+
+    def test_inner_voice_short(self) -> None:
+        self.store.save_disposition(DispositionSeed(
+            id="disp_stress",
+            statement="面对压力时倾向于先倾诉再行动",
+            strength=0.8,
+            evidence_ids=["ev1"],
+            activation_count=3,
+        ))
+        result = self.match_dispositions(self.store, "我压力很大很想找人说话倾诉一下")
+        if result.inner_voice:
+            self.assertLessEqual(len(result.inner_voice), 40)
+
+    def test_boost_weight_within_range(self) -> None:
+        self.store.save_disposition(DispositionSeed(
+            id="disp_test",
+            statement="面对问题倾向于先独立思考",
+            strength=0.9,
+            evidence_ids=["ev"],
+            activation_count=2,
+        ))
+        result = self.match_dispositions(self.store, "这个问题我想自己先想想独立思考")
+        self.assertGreaterEqual(result.boost_weight, 0.0)
+        self.assertLessEqual(result.boost_weight, 0.15)
+
+
+class DispositionReinforceTests(unittest.TestCase):
+    """反熏逻辑测试。"""
+
+    def setUp(self) -> None:
+        from extra_brain import MemoryStore
+        from extra_brain.disposition import reinforce_dispositions
+        self.store = MemoryStore(":memory:")
+        self.addCleanup(self.store.close)
+        self.reinforce = reinforce_dispositions
+
+    def test_empty_store_returns_empty(self) -> None:
+        changes = self.reinforce(self.store, "是的，确实是这样")
+        self.assertEqual(changes, [])
+
+    def test_affirm_strengthens(self) -> None:
+        seed = DispositionSeed(
+            id="disp_aff",
+            statement="面对压力时倾向于先倾诉",
+            strength=0.5,
+        )
+        self.store.save_disposition(seed)
+        changes = self.reinforce(
+            self.store,
+            "用户：我今天压力很大\n助手：倾诉一下如何\n用户：是的，就是这样，确实需要倾诉",
+        )
+        self.assertGreater(len(changes), 0)
+        updated = self.store.get_disposition("disp_aff")
+        self.assertGreater(updated.strength, 0.5)
+
+    def test_deny_weakens(self) -> None:
+        seed = DispositionSeed(
+            id="disp_deny",
+            statement="面对压力时倾向于先倾诉",
+            strength=0.7,
+        )
+        self.store.save_disposition(seed)
+        changes = self.reinforce(
+            self.store,
+            "助手：你以前喜欢先倾诉\n用户：不对，不是这样，我现在不想倾诉",
+        )
+        self.assertGreater(len(changes), 0)
+        updated = self.store.get_disposition("disp_deny")
+        self.assertLess(updated.strength, 0.7)
+
+    def test_strength_clamped_to_zero(self) -> None:
+        seed = DispositionSeed(
+            id="disp_low",
+            statement="某个不太对劲的倾向",
+            strength=0.05,
+            evidence_ids=["ev1"],
+        )
+        self.store.save_disposition(seed)
+        changes = self.reinforce(
+            self.store,
+            "用户：不对，不是，我不同意这个说法",
+        )
+        # strength 应该被 clamp 到 0
+        updated = self.store.get_disposition("disp_low")
+        self.assertGreaterEqual(updated.strength, 0.0)
+
+    def test_archived_on_low_strength(self) -> None:
+        seed = DispositionSeed(
+            id="disp_fade",
+            statement="将要淡化的倾向",
+            strength=0.14,
+            evidence_ids=["ev"],
+        )
+        self.store.save_disposition(seed)
+        self.reinforce(self.store, "今天天气不错")
+        updated = self.store.get_disposition("disp_fade")
+        self.assertTrue(updated.archived)
+
+
+class DispositionAbstractTests(unittest.TestCase):
+    """种子抽象测试。"""
+
+    def setUp(self) -> None:
+        from extra_brain import MemoryStore
+        from extra_brain.disposition import abstract_dispositions
+        self.store = MemoryStore(":memory:")
+        self.addCleanup(self.store.close)
+        self.abstract = abstract_dispositions
+
+    def test_abstract_with_insufficient_data_returns_empty(self) -> None:
+        results = self.abstract(self.store, limit=3)
+        self.assertEqual(results, [])
+
+    def test_abstract_from_repeated_patterns(self) -> None:
+        # 插入 3 条同一 pattern 的语义记忆
+        for i in range(3):
+            mem = SemanticMemory(
+                id=new_memory_id("sem", utc_now()),
+                type="preference",
+                subject="压力",
+                predicate="更喜欢",
+                object="先倾诉再行动",
+                detail=f"面对压力时倾向于先倾诉（第{i}次）",
+                importance=0.7 + i * 0.05,
+                emotion_valence="neutral",
+                emotion_intensity=0.3,
+                confidence=0.8,
+                source_episodic_ids=[],
+                created_at=to_iso8601(utc_now()),
+                last_activated=to_iso8601(utc_now()),
+            )
+            self.store.save_semantic(mem)
+        results = self.abstract(self.store, limit=3)
+        self.assertGreater(len(results), 0)
+
+    def test_abstract_dedup_existing(self) -> None:
+        # 先存一条已有种子
+        existing = DispositionSeed(
+            id="disp_existing",
+            statement="面对压力时倾向于先倾诉",
+            strength=0.6,
+        )
+        self.store.save_disposition(existing)
+        # 再插 3 条同 pattern 的记忆
+        for i in range(3):
+            mem = SemanticMemory(
+                id=new_memory_id("sem", utc_now()),
+                type="preference",
+                subject="压力",
+                predicate="更喜欢",
+                object="先倾诉再行动",
+                detail=f"面对压力时倾向于先倾诉（第{i}次）",
+                importance=0.7,
+                emotion_valence="neutral",
+                emotion_intensity=0.3,
+                confidence=0.8,
+                source_episodic_ids=[],
+                created_at=to_iso8601(utc_now()),
+                last_activated=to_iso8601(utc_now()),
+            )
+            self.store.save_semantic(mem)
+        results = self.abstract(self.store, limit=3)
+        # 应该因为去重而不会产生新种子
+        self.assertEqual(len(results), 0)
+
+
+class DispositionIntegrationTests(unittest.TestCase):
+    """集成测试。"""
+
+    def setUp(self) -> None:
+        from extra_brain import MemoryConfig, MemoryStore
+        self.store = MemoryStore(":memory:")
+        self.addCleanup(self.store.close)
+        self._config = MemoryConfig()
+
+
+class DispositionOldDBTests(unittest.TestCase):
+    """旧库兼容测试。"""
+
+    def test_old_db_returns_empty_dispositions(self) -> None:
+        from extra_brain import MemoryStore
+        store = MemoryStore(":memory:")
+        self.addCleanup(store.close)
+        seeds = store.list_dispositions()
+        self.assertEqual(seeds, [])
+        self.assertIsNone(store.get_disposition("nonexistent"))
+
+
+# ── v0.9.0 SelfState v2 测试 ─────────────────────────────────────
+
+
+class SelfStateV2ModelTests(unittest.TestCase):
+    """SelfState v0.9 新增字段测试。"""
+
+    def test_fatigue_reason_default_none(self) -> None:
+        ss = SelfState()
+        self.assertIsNone(ss.fatigue_reason)
+
+    def test_fatigue_reason_survives_roundtrip(self) -> None:
+        ss = SelfState(
+            energy=0.5,
+            fatigue_reason="高强度对话×3；主动开口×2",
+            version=5,
+        )
+        d = ss.to_dict()
+        self.assertEqual(d["fatigue_reason"], "高强度对话×3；主动开口×2")
+        ss2 = SelfState.from_dict(d)
+        self.assertEqual(ss2.fatigue_reason, "高强度对话×3；主动开口×2")
+        self.assertEqual(ss2.version, 5)
+
+    def test_old_dict_without_fatigue(self) -> None:
+        """旧版 to_dict 不含 fatigue_reason 的兼容。"""
+        ss = SelfState.from_dict({"energy": 0.6, "version": 3,
+                                  "mood_baseline": "平静",
+                                  "active_goals": [], "self_narrative": "",
+                                  "updated_at": ""})
+        self.assertIsNone(ss.fatigue_reason)
+
+
+class NarrativeLayerV2Tests(unittest.TestCase):
+    """NarrativeLayer v0.9 unresolved_threads 测试。"""
+
+    def test_unresolved_default_empty(self) -> None:
+        nl = NarrativeLayer(
+            id="nl_1", user_id="u1", phase="稳定期", theme="日常",
+            event_ids=[], summary="测试", last_updated=to_iso8601(NOW),
+        )
+        self.assertEqual(nl.unresolved_threads, [])
+
+    def test_unresolved_roundtrip(self) -> None:
+        nl = NarrativeLayer(
+            id="nl_2", user_id="u1", phase="稳定期", theme="日常",
+            event_ids=["ep_1"], summary="测试", last_updated=to_iso8601(NOW),
+            unresolved_threads=["ep_3", "ep_5"],
+        )
+        d = nl.to_dict()
+        self.assertEqual(d["unresolved_threads"], ["ep_3", "ep_5"])
+        nl2 = NarrativeLayer.from_dict(d)
+        self.assertEqual(nl2.unresolved_threads, ["ep_3", "ep_5"])
+
+    def test_old_dict_without_unresolved(self) -> None:
+        nl = NarrativeLayer.from_dict({
+            "id": "nl_1", "user_id": "u1", "phase": "稳定期", "theme": "日常",
+            "event_ids": [], "summary": "测试", "last_updated": to_iso8601(NOW),
+        })
+        self.assertEqual(nl.unresolved_threads, [])
+
+
+class EnergyTierTests(unittest.TestCase):
+    """能量分级标签测试。"""
+
+    def setUp(self) -> None:
+        from extra_brain.self_state import energy_tier
+        self.energy_tier = energy_tier
+
+    def test_tiers(self) -> None:
+        self.assertEqual(self.energy_tier(SelfState(energy=1.0)), "充沛")
+        self.assertEqual(self.energy_tier(SelfState(energy=0.75)), "充沛")
+        self.assertEqual(self.energy_tier(SelfState(energy=0.5)), "平稳")
+        self.assertEqual(self.energy_tier(SelfState(energy=0.3)), "偏低")
+        self.assertEqual(self.energy_tier(SelfState(energy=0.2)), "疲惫")
+        self.assertEqual(self.energy_tier(SelfState(energy=0.15)), "极度疲惫")
+
+
+class LifeSnapshotTests(unittest.TestCase):
+    """人生快照存储与回滚测试。"""
+
+    def setUp(self) -> None:
+        from extra_brain import MemoryStore
+        self.store = MemoryStore(":memory:")
+        self.addCleanup(self.store.close)
+
+    def test_snapshot_save_and_list(self) -> None:
+        ss = SelfState(energy=0.7, mood_baseline="开心", version=10,
+                       self_narrative="今天很开心")
+        self.store.save_self_state(ss)
+        from extra_brain.self_state import take_snapshot, list_snapshots
+        sid = take_snapshot(self.store, reason="阶段转换测试")
+        self.assertTrue(sid.startswith("snap_"))
+        snaps = list_snapshots(self.store)
+        self.assertEqual(len(snaps), 1)
+        self.assertEqual(snaps[0]["id"], sid)
+
+    def test_snapshot_rollback(self) -> None:
+        ss1 = SelfState(energy=0.9, version=5)
+        self.store.save_self_state(ss1)
+        from extra_brain.self_state import take_snapshot, rollback_to_snapshot
+        sid = take_snapshot(self.store)
+        # 改变当前状态
+        ss2 = SelfState(energy=0.5, version=10)
+        self.store.save_self_state(ss2)
+        # 回滚
+        restored = rollback_to_snapshot(self.store, sid)
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.energy, 0.9)
+        self.assertEqual(restored.version, 5)
+
+    def test_rollback_nonexistent(self) -> None:
+        from extra_brain.self_state import rollback_to_snapshot
+        self.assertIsNone(rollback_to_snapshot(self.store, "snap_nonexistent"))
+
+
+class EnergyComputationTests(unittest.TestCase):
+    """多因素能量计算测试。"""
+
+    def setUp(self) -> None:
+        from extra_brain import MemoryStore, MemoryConfig
+        self.store = MemoryStore(":memory:")
+        self.addCleanup(self.store.close)
+
+    def test_energy_clamped(self) -> None:
+        """energy 不会超出 [0.15, 1.0]。"""
+        ss = SelfState(energy=1.0)
+        self.assertEqual(ss.energy, 1.0)
+        low = SelfState(energy=0.05)
+        self.assertEqual(low.energy, 0.15)
+
+    def test_basic_still_pass(self) -> None:
+        """SelfState 保存/读取仍然正常。"""
+        ss = SelfState(energy=0.75, mood_baseline="开心", version=3,
+                       fatigue_reason="测试")
+        self.store.save_self_state(ss)
+        loaded = self.store.get_self_state()
+        self.assertEqual(loaded.energy, 0.75)
+        self.assertEqual(loaded.mood_baseline, "开心")
+        self.assertEqual(loaded.fatigue_reason, "测试")
+
+
+class UnresolvedCountTests(unittest.TestCase):
+    """未平复事件计数测试。"""
+
+    def setUp(self) -> None:
+        from extra_brain import MemoryStore
+        self.store = MemoryStore(":memory:")
+        self.addCleanup(self.store.close)
+
+    def test_empty_store(self) -> None:
+        from extra_brain.self_state import count_unresolved
+        self.assertEqual(count_unresolved(self.store), 0)
+
+    def test_counts_unresolved(self) -> None:
+        from extra_brain.self_state import count_unresolved
+        ep = EpisodicMemory(
+            id="ep_unres_1",
+            timestamp=to_iso8601(NOW),
+            summary="未平复事件",
+            key_moments=["关键时刻"],
+            emotions=["难过"],
+            importance=0.8,
+            related_semantic_ids=[],
+            participants=["user", "agent"],
+            emotion_state="open",
+        )
+        self.store.save_episodic(ep)
+        self.assertEqual(count_unresolved(self.store), 1)

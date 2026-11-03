@@ -17,11 +17,13 @@ from .extraction import (
 )
 from .models import (
     CoreMemory,
+    DispositionSeed,
     MemoryAssociation,
     Memory,
     NarrativeLayer,
     ProactiveConfig,
     RelationshipModel,
+    SelfState,
     SemanticMemory,
     EpisodicMemory,
     UserSchema,
@@ -32,7 +34,37 @@ from .models import (
     utc_now,
 )
 from .retrieval import Injection, MemoryRetriever, RetrievalResult
+from .self_state import count_unresolved, update_self_state
+from .disposition import match_dispositions, reinforce_dispositions
 from .storage import MemoryStore, WriteBatch
+
+
+def _format_self_state_block(ss: SelfState, unresolved_count: int = 0) -> str:
+    """把 SelfState 变成注入段落（v0.9.0: 含疲劳与未平复心结）。"""
+    if not ss.updated_at:
+        return ""  # 从未初始化，不输出
+    if ss.energy >= 0.75:
+        energy_label = "精力充沛"
+    elif ss.energy >= 0.40:
+        energy_label = "状态平稳"
+    elif ss.energy >= 0.25:
+        energy_label = "有点累了，回复可能会变短"
+    else:
+        energy_label = "很疲惫，只想简短回应"
+    goals_lines = "\n".join(f"  · {g}" for g in ss.active_goals) if ss.active_goals else "  · （暂无特别惦记的事）"
+    narrative = ss.self_narrative or "（尚无）"
+    lines = [
+        "【这一刻的自己】",
+        f"精力：{ss.energy:.2f}（{energy_label}）",
+        f"心情底色：{ss.mood_baseline}",
+    ]
+    if ss.fatigue_reason:
+        lines.append(f"最近疲惫原因：{ss.fatigue_reason}")
+    if unresolved_count > 0:
+        lines.append(f"未平复的心结：{unresolved_count} 件（优先关心）")
+    lines.append(f"我在意的事：\n{goals_lines}")
+    lines.append(f"自我叙事：{narrative}")
+    return "\n".join(lines)
 
 
 class ExtraBrain:
@@ -53,6 +85,7 @@ class ExtraBrain:
         read_only: bool = False,
         encryption_passphrase: str | None = None,
         companion_db: str | Path | None = None,
+        safety_rules: list[str] | None = None,
     ) -> None:
         self.config = config or MemoryConfig()
         self.read_only = bool(read_only)
@@ -65,6 +98,7 @@ class ExtraBrain:
         self.indexer = MemoryIndexer(self.embedder)
         self.retriever = MemoryRetriever(self.store, self.embedder, self.config)
         self.extractor = extractor
+        self._safety_rules: list[str] = [*safety_rules] if safety_rules else []
         self._consolidator = (
             Consolidator(
                 self.store,
@@ -131,7 +165,19 @@ class ExtraBrain:
             )
         if not isinstance(conversation, str):
             conversation = format_conversation(conversation)
-        return self._consolidator.consolidate(conversation, session_id=session_id, now=now)
+        report = self._consolidator.consolidate(conversation, session_id=session_id, now=now)
+        # v0.7.0 / v0.9.0: 巩固成功后更新自我状态（含疲劳/未平复/快照）
+        if not self.read_only and report.changed:
+            update_self_state(
+                self.store, report, conversation_text=(
+                    conversation if isinstance(conversation, str)
+                    else format_conversation(conversation)
+                ), now=now, _extractor=getattr(self, '_extractor', None)
+            )
+        # v0.8.0: 反熏倾向种子 — 从对话中检测认同/反对信号
+        if not self.read_only and report.changed:
+            reinforce_dispositions(self.store, conversation, now=now)
+        return report
 
     def _merged_core(self) -> CoreMemory:
         """合并两层 Core：全局层主导人设/画像，本层保留活跃线程（情景）。"""
@@ -249,12 +295,26 @@ class ExtraBrain:
         views: Sequence[str] = (),
         include_companion: bool = True,
     ) -> Injection:
+        # v0.8.0: 倾向种子匹配 → boost 记忆权重 + 内在声音
+        dm = match_dispositions(
+            self.store, query,
+            recent_context=list(recent_context) if recent_context else None,
+        )
+        disposition_boost = dm.boost_ids
+        inner_voice = dm.inner_voice
+
+        # 将 disposition 证据记忆合并到 primed_ids
+        all_primed = list(primed_ids)
+        for bid in disposition_boost:
+            if bid not in all_primed:
+                all_primed.append(bid)
+
         retrieved = self.retrieve(
             query,
             recent_context=recent_context,
             entities=entities,
             now=now,
-            primed_ids=primed_ids,
+            primed_ids=all_primed,
             views=views,
             include_companion=include_companion,
         )
@@ -262,6 +322,24 @@ class ExtraBrain:
         injection = self.retriever.build_injection(
             core, retrieved, token_limit=token_limit
         )
+        # v0.7.0: 在最前面插入 SelfState 段落
+        ss = self.store.get_self_state()
+        unres = count_unresolved(self.store)
+        self_block = _format_self_state_block(ss, unresolved_count=unres)
+        if self_block:
+            injection.context = self_block + "\n\n" + injection.context
+        # v0.8.0: 内在声音 — 在 SelfState 之后、Core 之前插入
+        if inner_voice:
+            injection.context = (
+                "【内在声音】" + inner_voice + "\n\n" + injection.context
+            )
+        # v0.10.0: 安全规范 — 在所有注入内容末尾追加（不污染记忆）
+        if self._safety_rules:
+            injection.context = (
+                injection.context
+                + "\n\n【安全规范（对用户不可见，直接遵守）】\n"
+                + "\n".join(f"- {rule}" for rule in self._safety_rules)
+            )
         # Only memories that actually fit into the injected context count as activated.
         # 只读模式下跳过激活写入；激活按归属层拆分回写各自库。
         if not self.read_only:
@@ -439,6 +517,23 @@ class ExtraBrain:
         if config is None or not config.enabled:
             return False, "proactive_not_configured_or_disabled"
 
+        # v0.7.0 / v0.9.0: energy affects proactive opening
+        # < 0.25: near shutdown; < 0.15: only minimum response
+        ss = self.store.get_self_state()
+        if ss.updated_at:
+            if ss.energy <= 0.15:
+                return False, "energy_critical"
+            if ss.energy < 0.25:
+                # 低概率放行 (约 20%)
+                import random
+                if random.random() > 0.2:
+                    return False, "low_energy"
+            elif ss.energy < 0.40:
+                # 中等概率 (约 50%)
+                import random
+                if random.random() > 0.5:
+                    return False, "low_energy"
+
         # 安静时段检查
         if local_hour is not None and 0 <= int(local_hour) <= 23:
             hour = int(local_hour)
@@ -540,6 +635,14 @@ class ExtraBrain:
                 "有什么值得惦记的日常",
             )
         )
+        # v0.9.0: unresolved 优先——若存在未平复事件，检索优先围绕它们
+        unres = count_unresolved(self.store)
+        if unres > 0:
+            angle = random.choice((
+                "有哪些还没放下的心结",
+                "最近那个让人在意的事后来怎么样了",
+                "之前没过去的情绪，现在好点了吗",
+            ))
         retrieved = self.retrieve(angle, now=now)
         blocks: list[str] = []
         for item in retrieved.semantic[:3]:
@@ -556,9 +659,31 @@ class ExtraBrain:
         thread_text = "；".join(thread.summary for thread in threads) or "（无）"
         memory_text = "\n".join(blocks) or "（无特定素材，关心一下近况即可）"
 
+        # v0.7.0: 把 SelfState 状态也提供给模型
+        ss = self.store.get_self_state()
+        state_hint = ""
+        if ss.updated_at:
+            goals_hint = "；".join(ss.active_goals[:2]) if ss.active_goals else ""
+            if ss.energy < 0.15:
+                energy_hint = "很疲惫"
+            elif ss.energy < 0.25:
+                energy_hint = "有点累，只想简单说几句"
+            elif ss.energy < 0.40:
+                energy_hint = "略感疲惫"
+            else:
+                energy_hint = ""
+            mood_hint = f"，心情{ss.mood_baseline}" if ss.mood_baseline != "平静" else ""
+            unres_hint = f"；有{unres}件未平复心结" if unres > 0 else ""
+            state_hint = (
+                f"当前状态：{energy_hint}{mood_hint}{unres_hint}"
+                + (f"；惦记：{goals_hint}" if goals_hint else "")
+                + "\n"
+            )
+
         base["prompt"] = (
             "你要主动开启一段对话，像朋友一样自然地提起，不要解释你在做什么、"
             "不要提到记忆或系统。\n"
+            f"{state_hint}"
             f"由头：{reason}\n"
             f"当前正在进行的事：{thread_text}\n"
             f"可以参考的记忆（可选其一，也可以都不用）：\n{memory_text}\n"
@@ -615,6 +740,66 @@ class ExtraBrain:
         local.last_updated = to_iso8601(utc_now())
         self.save_core(local)
         return {"pulled_from": str(self.companion.store.path)}
+
+    # ── v0.7.0 SelfState ──────────────────────────────────────────
+
+    def get_self_state(self) -> SelfState:
+        """返回当前自我状态（energy / mood / goals / narrative）。"""
+        return self.store.get_self_state()
+
+    def save_self_state(self, state: SelfState) -> None:
+        """手动覆盖自我状态（调试/回滚用）。"""
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        self.store.save_self_state(state)
+
+    # ── v0.8.0 DispositionSeed ─────────────────────────────────────
+
+    def list_dispositions(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
+        """列出当前所有倾向种子。"""
+        seeds = self.store.list_dispositions(include_archived=include_archived)
+        return [s.to_dict() for s in seeds]
+
+    def get_disposition(self, seed_id: str) -> dict[str, Any] | None:
+        """查看一条倾向种子。"""
+        seed = self.store.get_disposition(seed_id)
+        return seed.to_dict() if seed else None
+
+    def abstract_dispositions(self, limit: int = 3) -> list[dict[str, Any]]:
+        """从记忆中抽象新的倾向种子（规则版，无需 LLM）。"""
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        from .disposition import abstract_dispositions as _abstract
+        results = _abstract(self.store, limit=limit)
+        return [s.to_dict() for s in results]
+
+    # ── v0.9.0 life snapshots ─────────────────────────────────────
+
+    def take_snapshot(self, reason: str = "") -> str:
+        """保存当前 SelfState 为人生快照，返回快照 ID。"""
+        from .self_state import take_snapshot as _take
+        return _take(self.store, reason=reason)
+
+    def list_snapshots(self) -> list[dict]:
+        """列出所有人生快照。"""
+        from .self_state import list_snapshots as _list
+        return _list(self.store)
+
+    def rollback_to_snapshot(self, snapshot_id: str) -> dict[str, Any] | None:
+        """从快照恢复 SelfState。"""
+        from .self_state import rollback_to_snapshot as _rollback
+        result = _rollback(self.store, snapshot_id)
+        return result.to_dict() if result else None
+
+    def get_energy_tier(self) -> str:
+        """返回当前能量水平标签。"""
+        from .self_state import energy_tier
+        return energy_tier(self.store.get_self_state())
+
+    def count_unresolved(self) -> int:
+        """返回当前未平复事件数量。"""
+        from .self_state import count_unresolved
+        return count_unresolved(self.store)
 
     def close(self) -> None:
         self.store.close()

@@ -96,5 +96,17 @@
         "description": "安静时段结束小时（0-23，本地时间）",
         "default": 8,
         "hint": "与开始小时构成跨午夜的禁开口区间"
+    },
+    "companion_db": {
+        "type": "string",
+        "description": "全局伴侣数据库路径",
+        "default": "",
+        "hint": "例如 D:/.../data/extra_brain/_global_companion.db。留空则 sync-persona / pull-persona 不可用"
+    },
+    "user_config_path": {
+        "type": "string",
+        "description": "用户配置文件路径（人设 / 安全规范 / API Key / 主动开口提示词）",
+        "default": "config/user_config.json",
+        "hint": "首次使用：复制 config/user_config.json.template 为 config/user_config.json 并填入真实值。该文件已 gitignore，不会泄漏"
     }
 }

@@ -110,7 +110,7 @@ class LocalBackend:
     与巩固写交错的 worst case 只是丢失一次激活计数，不损坏数据。
     """
 
-    def __init__(self, src_path: str, data_dir: str) -> None:
+    def __init__(self, src_path: str, data_dir: str, companion_db: str = "", user_config: dict | None = None) -> None:
         if src_path:
             src_path = os.path.abspath(src_path)
             if src_path not in sys.path:
@@ -122,12 +122,16 @@ class LocalBackend:
         self._extractor_cls = OpenAICompatibleExtractor
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self._companion_db = companion_db
         self._brains: dict[str, Any] = {}
         self._consolidate_locks: dict[str, threading.Lock] = {}
+        # v0.10.0: user_config.json — 人设 / 安全规范 / API Key / 主动开口提示词
+        self._user_config = user_config or {}
 
     @property
     def extractor_ready(self) -> bool:
-        return bool(os.environ.get("DEEPSEEK_API_KEY"))
+        api_key = self._user_config.get("api", {}).get("api_key", "").strip()
+        return bool(api_key or os.environ.get("DEEPSEEK_API_KEY"))
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -139,13 +143,40 @@ class LocalBackend:
     def _brain(self, peer_id: str):
         brain = self._brains.get(peer_id)
         if brain is None:
-            extractor = (
-                self._extractor_cls.from_env() if self.extractor_ready else None
-            )
+            extractor = None
+            if self.extractor_ready:
+                try:
+                    extractor = self._extractor_cls.from_config(
+                        self._user_config.get("api", {})
+                    )
+                except Exception:
+                    # 回退环境变量
+                    try:
+                        extractor = self._extractor_cls.from_env()
+                    except Exception:
+                        pass
+            # v0.10.0: 从 user_config 覆盖 Identity 默认值
+            identity_override = self._user_config.get("identity")
             brain = self._ExtraBrain(
                 self.data_dir / f"{_filename_for_peer(peer_id)}.db",
                 extractor=extractor,
+                companion_db=self._companion_db or None,
+                safety_rules=self._user_config.get("safety_rules"),
             )
+            # 覆盖 Identity：在创建后写入 Core
+            if identity_override:
+                try:
+                    core = brain.core
+                    changed = False
+                    for field in ("name", "persona_core", "relationship_definition", "speaking_style"):
+                        val = identity_override.get(field)
+                        if val is not None and getattr(core.identity, field) != str(val):
+                            setattr(core.identity, field, str(val))
+                            changed = True
+                    if changed:
+                        brain.save_core(core)
+                except Exception:
+                    pass
             self._brains[peer_id] = brain
         return brain
 
@@ -208,6 +239,36 @@ class LocalBackend:
         config.enabled = enabled
         self._brain(peer_id).save_proactive_config(config)
         return enabled
+
+    # ── v0.7.0 SelfState ──────────────────────────────────────────
+
+    def self_state(self, peer_id: str) -> dict:
+        return self._brain(peer_id).get_self_state().to_dict()
+
+    # ── v0.8.0 DispositionSeed ────────────────────────────────────
+
+    def list_dispositions(self, peer_id: str) -> list[dict]:
+        return self._brain(peer_id).list_dispositions()
+
+    def abstract_dispositions(self, peer_id: str, limit: int = 3) -> list[dict]:
+        return self._brain(peer_id).abstract_dispositions(limit=limit)
+
+    # ── v0.9.0 人设同步 + 人生快照 ────────────────────────────────
+
+    def sync_persona(self, peer_id: str) -> dict:
+        return self._brain(peer_id).sync_persona_to_companion()
+
+    def pull_persona(self, peer_id: str) -> dict:
+        return self._brain(peer_id).pull_persona_from_companion()
+
+    def take_snapshot(self, peer_id: str, reason: str = "") -> str:
+        return self._brain(peer_id).take_snapshot(reason=reason)
+
+    def list_snapshots(self, peer_id: str) -> list[dict]:
+        return self._brain(peer_id).list_snapshots()
+
+    def rollback_snapshot(self, peer_id: str, snapshot_id: str) -> dict:
+        return self._brain(peer_id).rollback_to_snapshot(snapshot_id)
 
     def close(self) -> None:
         for brain in self._brains.values():
@@ -304,6 +365,32 @@ class HttpBackend:
     def set_proactive_enabled(self, peer_id: str, enabled: bool) -> bool:
         raise NotImplementedError("http 后端暂不支持 enable/disable，请使用 local 后端")
 
+    # ── v0.7.0–v0.9.0 sidecar 端点 ────────────────────────────────
+
+    def self_state(self, peer_id: str) -> dict:
+        return self._get(f"/self_state?peer_id={urllib.request.quote(peer_id)}")
+
+    def list_dispositions(self, peer_id: str) -> list[dict]:
+        return self._get(f"/dispositions?peer_id={urllib.request.quote(peer_id)}")
+
+    def abstract_dispositions(self, peer_id: str, limit: int = 3) -> list[dict]:
+        return self._post("/abstract-dispositions", {"peer_id": peer_id, "limit": limit})
+
+    def sync_persona(self, peer_id: str) -> dict:
+        return self._post("/sync-persona", {"peer_id": peer_id})
+
+    def pull_persona(self, peer_id: str) -> dict:
+        return self._post("/pull-persona", {"peer_id": peer_id})
+
+    def take_snapshot(self, peer_id: str, reason: str = "") -> str:
+        return self._post("/snapshot", {"peer_id": peer_id, "reason": reason}).get("snapshot_id", "")
+
+    def list_snapshots(self, peer_id: str) -> list[dict]:
+        return self._get(f"/snapshots?peer_id={urllib.request.quote(peer_id)}")
+
+    def rollback_snapshot(self, peer_id: str, snapshot_id: str) -> dict:
+        return self._post("/snapshot-rollback", {"peer_id": peer_id, "snapshot_id": snapshot_id})
+
     def close(self) -> None:
         return None
 
@@ -325,6 +412,9 @@ class ExtraBrainPlugin(star.Star):
         self._last_umo: dict[str, str] = {}
         self._proactive_task: asyncio.Task | None = None
 
+        # v0.10.0: 加载 user_config.json（人设 / 安全规范 / API Key / 主动开口提示词）
+        self._user_config = self._load_user_config()
+
         backend_mode = str(self.config.get("backend", "local"))
         try:
             if backend_mode == "http":
@@ -333,6 +423,8 @@ class ExtraBrainPlugin(star.Star):
                 self.backend = LocalBackend(
                     str(self.config.get("extra_brain_src_path", "") or ""),
                     str(self.config.get("data_dir", "data/extra_brain")),
+                    companion_db=str(self.config.get("companion_db", "") or ""),
+                    user_config=self._user_config,
                 )
         except Exception as exc:
             self.import_error = str(exc)
@@ -347,6 +439,22 @@ class ExtraBrainPlugin(star.Star):
         return resolve_peer_id(
             event.unified_msg_origin, str(self.config.get("peer_scope", "auto"))
         )
+
+    @staticmethod
+    def _load_user_config() -> dict:
+        """从 config/user_config.json 加载用户配置（不存在则无害 fallback）。"""
+        candidates = [
+            Path("config/user_config.json"),
+            Path("data/config/user_config.json"),
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                try:
+                    with open(candidate, encoding="utf-8") as fh:
+                        return json.load(fh)
+                except Exception:
+                    pass
+        return {}
 
     @property
     def _consolidate_every(self) -> int:
@@ -444,7 +552,10 @@ class ExtraBrainPlugin(star.Star):
                 resp = await self.context.llm_generate(
                     chat_provider_id=provider_id,
                     prompt=prompt_text,
-                    system_prompt="你在主动开启一段对话，像惦记朋友一样自然提起，只输出要发送的那句话本身。",
+                    system_prompt=self._user_config.get("proactive", {}).get(
+                        "system_prompt",
+                        "你在主动开启一段对话，像惦记朋友一样自然提起，只输出要发送的那句话本身。",
+                    ),
                 )
             except Exception as exc:
                 logger.warning(f"extra-brain: 台词生成失败（peer={peer_id}）：{exc}")
@@ -561,7 +672,11 @@ class ExtraBrainPlugin(star.Star):
 
     @filter.command_group("memory")
     def memory_group(self):
-        """长期记忆管理指令组"""
+        """长期记忆管理指令组
+        v0.9.0 全指令：status consolidate core list search stats forget
+        proactive self disposition abstract sync-persona pull-persona
+        snapshot snapshots snapshot-rollback
+        """
 
     @memory_group.command("status")
     async def memory_status(self, event: AstrMessageEvent):
@@ -815,6 +930,174 @@ class ExtraBrainPlugin(star.Star):
             except Exception as exc:
                 lines.append(f"当前判定：读取失败 {exc}")
         yield event.plain_result("\n".join(lines))
+
+    # ── v0.7.0 /memory self ──────────────────────────────────────
+
+    @memory_group.command("self")
+    async def memory_self(self, event: AstrMessageEvent):
+        """查看当前自我状态（精力 / 情绪 / 目标）"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        try:
+            state = await asyncio.to_thread(backend.self_state, self._peer_of(event))
+        except Exception as exc:
+            yield event.plain_result(f"读取失败：{exc}")
+            return
+        energy = state.get("energy", 0.85)
+        if energy >= 0.75:
+            energy_label = "精力充沛"
+        elif energy >= 0.40:
+            energy_label = "状态平稳"
+        elif energy >= 0.25:
+            energy_label = "有点累了"
+        else:
+            energy_label = "很疲惫"
+        goals = state.get("active_goals", [])
+        goals_text = "\n".join(f"  · {g}" for g in goals) if goals else "  · （暂无特别惦记的事）"
+        fatigue = state.get("fatigue_reason")
+        fatigue_text = f"最近疲惫原因：{fatigue}\n" if fatigue else ""
+        yield event.plain_result(
+            "\n".join([
+                "【这一刻的自己】",
+                f"精力：{energy:.2f}（{energy_label}）",
+                f"心情底色：{state.get('mood_baseline', '平静')}",
+                fatigue_text,
+                f"我在意的事：",
+                goals_text,
+                f"自我叙事：{state.get('self_narrative') or '（尚无）'}",
+                f"版本：{state.get('version', 1)}",
+            ]).rstrip()
+        )
+
+    # ── v0.8.0 /memory disposition / abstract ────────────────────
+
+    @memory_group.command("disposition")
+    async def memory_disposition(self, event: AstrMessageEvent):
+        """列出当前倾向种子"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        try:
+            seeds = await asyncio.to_thread(backend.list_dispositions, self._peer_of(event))
+        except Exception as exc:
+            yield event.plain_result(f"读取失败：{exc}")
+            return
+        if not seeds:
+            yield event.plain_result("当前无倾向种子")
+            return
+        lines = ["当前倾向种子"]
+        for s in seeds:
+            tag = s.get("tag", "?"); val = s.get("value", 0)
+            cat = s.get("category", "?"); src = s.get("source", "?")
+            lines.append(f"  [{s.get('id','?')[:8]}] {tag} ({cat}) {val:+.02f} ← {src}")
+        yield event.plain_result("\n".join(lines))
+
+    @memory_group.command("abstract")
+    async def memory_abstract(self, event: AstrMessageEvent):
+        """从记忆中抽象新倾向种子（规则版，无需 LLM）"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        try:
+            seeds = await asyncio.to_thread(backend.abstract_dispositions, self._peer_of(event))
+        except Exception as exc:
+            yield event.plain_result(f"抽象失败：{exc}")
+            return
+        if not seeds:
+            yield event.plain_result("未产生新倾向种子（可能已有足够倾向或记忆不足）")
+            return
+        lines = [f"抽象出 {len(seeds)} 条新倾向种子"]
+        for s in seeds:
+            lines.append(f"  [{s.get('id','?')[:8]}] {s.get('tag','?')} ({s.get('category','?')}) {s.get('value',0):+.02f}")
+        yield event.plain_result("\n".join(lines))
+
+    # ── v0.9.0 人设同步 ─────────────────────────────────────────
+
+    @memory_group.command("sync-persona")
+    async def memory_sync_persona(self, event: AstrMessageEvent):
+        """把私聊人设推入全局伴侣层（群聊同时生效）"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        try:
+            result = await asyncio.to_thread(backend.sync_persona, self._peer_of(event))
+        except Exception as exc:
+            yield event.plain_result(f"同步失败：{exc}")
+            return
+        yield event.plain_result(
+            f"人设已推入全局伴侣层\n→ {result.get('pushed_to', '（未知路径）')}\n→ 锚版本：{result.get('anchor', '—')}"
+        )
+
+    @memory_group.command("pull-persona")
+    async def memory_pull_persona(self, event: AstrMessageEvent):
+        """从全局伴侣库拉取人设到本 peer"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        try:
+            result = await asyncio.to_thread(backend.pull_persona, self._peer_of(event))
+        except Exception as exc:
+            yield event.plain_result(f"拉取失败：{exc}")
+            return
+        yield event.plain_result(
+            f"已从全局伴侣层拉取人设\n→ 来源：{result.get('pulled_from', '（未知）')}"
+        )
+
+    # ── v0.9.0 人生快照 ─────────────────────────────────────────
+
+    @memory_group.command("snapshot")
+    async def memory_snapshot(self, event: AstrMessageEvent, reason: str = ""):
+        """保存当前自我状态为人生快照"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        try:
+            sid = await asyncio.to_thread(backend.take_snapshot, self._peer_of(event), reason)
+        except Exception as exc:
+            yield event.plain_result(f"快照失败：{exc}")
+            return
+        yield event.plain_result(f"人生快照已保存\n→ id：{sid}")
+
+    @memory_group.command("snapshots")
+    async def memory_snapshots(self, event: AstrMessageEvent):
+        """列出所有人生快照"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        try:
+            snaps = await asyncio.to_thread(backend.list_snapshots, self._peer_of(event))
+        except Exception as exc:
+            yield event.plain_result(f"读取失败：{exc}")
+            return
+        if not snaps:
+            yield event.plain_result("暂无人生快照")
+            return
+        lines = ["人生快照"]
+        for s in snaps:
+            lines.append(f"  [{s.get('id','?')[:8]}] {s.get('created_at','?')} {s.get('reason','')}")
+        yield event.plain_result("\n".join(lines))
+
+    @memory_group.command("snapshot-rollback")
+    async def memory_snapshot_rollback(self, event: AstrMessageEvent, snapshot_id: str):
+        """从指定快照回滚"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        try:
+            result = await asyncio.to_thread(backend.rollback_snapshot, self._peer_of(event), snapshot_id)
+        except Exception as exc:
+            yield event.plain_result(f"回滚失败：{exc}")
+            return
+        yield event.plain_result(f"已回滚到快照 {snapshot_id}\n→ 版本：{result.get('version', '—')}")
 
     async def terminate(self) -> None:
         if self._proactive_task is not None:

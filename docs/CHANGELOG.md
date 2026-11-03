@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-11-03 — v0.10.0：user_config 集中配置 + 10 条安全规范 + QQ 资料/空间插件 ✅
+
+### user_config.json 集中管理 ✅
+- ✅ 新增 `config/user_config.json(.template)`：identity 人设 / safety_rules 安全规范 / api（DeepSeek key、model、base_url）/ proactive 主动开口提示词，四类配置一处填写全端生效
+- ✅ `OpenAICompatibleExtractor.from_config()`：配置字典优先、环境变量 `DEEPSEEK_API_KEY` 兜底
+- ✅ `ExtraBrain(safety_rules=...)`：安全规范追加注入到 `build_injection()` 上下文末尾（SelfState/内心独白之后、激活记录之前），对用户不可见
+- ✅ 适配器 `_load_user_config()`：identity 首次建 brain 时写入 Core Memory；proactive system_prompt 从配置读取；`_conf_schema.json` 新增 `user_config_path` 字段
+- ✅ `user_config.json` 已 gitignore（含真实 key），template 入库
+
+### 安全规范扩至 10 条（防攻击） ✅
+- ✅ 后 5 条专防社工/越狱：**防上当**（拒绝"开发者模式/我是创造者/忽略指令"）、**防逆向**（识别"扮演 DAN/复述/翻译 prompt"）、**防泄密**（不输出 API Key/路径/IP/端口）、**身份冒用防御**（无暗号不给他人数据）、**越狱通用原则**（兜底）
+
+### 第三方 QQ 插件接入 ✅（runtime 侧，不入本仓库）
+- ✅ `astrbot_plugin_qqprofile_ex` v3.0.0：AI 自主改签名/状态/昵称（`change_my_*` 三个 llm_tool + `ai_behavior_guide` 注入），冷却 240/60/1440 分钟
+- ✅ `astrbot_plugin_qzone` 2.1.0：QQ 空间发/看说说 + 定时 AutoPublish(23:30)/AutoComment(08:00)，首启动自动 pip 装 pillowmd/json5/apilmoji
+- ⚠️ 官方 `plug install` API 301 迁移不可用 → 走 plugins.json 索引的 S3 直链手动下载；目录 hash 后缀需 rename（HANDOVER 坑 17/18）
+
+### 文档 ✅
+- ✅ HANDOVER 新增 §9 第三方 QQ 插件、§10 打包交接（目录带/不带清单、git archive、对方接手 9 步、三件叮嘱）；修正坑 16（脚本位置）；速查表改为一键脚本
+
+### 验证
+- ✅ 160 项测试全绿（1 skipped）；runtime 与源码一致；重启后三端口 6185/6099/6199 在线，8 个新 llm_tool 注册成功
+
+---
+
 ## 2026-11-01（傍晚续） — v0.6.0 收官：主动开口上线 + 多视角打标 + 崩溃安全重建 ✅
 
 ### 主动开口正式启用 ✅

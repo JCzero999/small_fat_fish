@@ -133,6 +133,30 @@ class ExtraBrainServer:
         if method == "POST" and route == "/proactive_record":
             return self._proactive_record(body)
 
+        if method == "GET" and route == "/self_state":
+            return self._brain(_peer(query)).get_self_state().to_dict()
+
+        if method == "GET" and route == "/dispositions":
+            return self._brain(_peer(query)).list_dispositions()
+
+        if method == "POST" and route == "/abstract-dispositions":
+            return self._abstract_dispositions(body)
+
+        if method == "POST" and route == "/sync-persona":
+            return self._brain(_peer(body)).sync_persona_to_companion()
+
+        if method == "POST" and route == "/pull-persona":
+            return self._brain(_peer(body)).pull_persona_from_companion()
+
+        if method == "POST" and route == "/snapshot":
+            return self._snapshot(body)
+
+        if method == "GET" and route == "/snapshots":
+            return self._brain(_peer(query)).list_snapshots()
+
+        if method == "POST" and route == "/snapshot-rollback":
+            return self._snapshot_rollback(body)
+
         raise _HttpError(HTTPStatus.NOT_FOUND, f"unknown route {method} {route}")
 
     def _inject(self, body: Mapping[str, Any]) -> dict[str, Any]:
@@ -249,6 +273,32 @@ class ExtraBrainServer:
                 raise _HttpError(HTTPStatus.SERVICE_UNAVAILABLE, "read-only mode")
             brain.record_proactive_open(peer_id, now=now, umo=umo)
         return {"peer_id": peer_id, "recorded": True}
+
+    def _abstract_dispositions(self, body: Mapping[str, Any]) -> list[dict[str, Any]]:
+        peer_id = _peer(body)
+        limit = int(body.get("limit", 3))
+        with self._lock:
+            return self._brain(peer_id).abstract_dispositions(limit=limit)
+
+    def _snapshot(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        if self.read_only:
+            raise _HttpError(HTTPStatus.SERVICE_UNAVAILABLE, "read-only mode")
+        peer_id = _peer(body)
+        reason = _string(body.get("reason"), "reason") if body.get("reason") else ""
+        with self._lock:
+            sid = self._brain(peer_id).take_snapshot(reason=reason)
+        return {"peer_id": peer_id, "snapshot_id": sid}
+
+    def _snapshot_rollback(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        if self.read_only:
+            raise _HttpError(HTTPStatus.SERVICE_UNAVAILABLE, "read-only mode")
+        peer_id = _peer(body)
+        snapshot_id = _string(body.get("snapshot_id"), "snapshot_id")
+        with self._lock:
+            state = self._brain(peer_id).rollback_to_snapshot(snapshot_id)
+        if state is None:
+            raise _HttpError(HTTPStatus.NOT_FOUND, f"snapshot {snapshot_id} not found")
+        return state.to_dict()
 
     def _list(self, peer_id: str, kind: str) -> dict[str, Any]:
         with self._lock:

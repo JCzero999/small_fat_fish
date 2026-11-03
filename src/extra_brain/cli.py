@@ -102,6 +102,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("sync-persona", help="把本库人设/称呼/稳定偏好推入全局伴侣库（--companion-db）")
     commands.add_parser("pull-persona", help="从全局伴侣库拉取人设到本库（新场景自动继承）")
+
+    # v0.7.0 / v0.9.0 SelfState
+    self_cmd = commands.add_parser("self", help="查看当前自我状态（能量/心情/目标/疲劳/叙事）")
+    self_cmd.add_argument("--rollback", type=int, metavar="VERSION",
+                          help="回滚到指定版本（暂未实现，先做查看）")
+
+    # v0.8.0 DispositionSeed
+    list_disp = commands.add_parser("list-dispositions",
+                                    help="列出所有倾向种子")
+    abstract_cmd = commands.add_parser("abstract-dispositions",
+                                       help="从记忆中抽象新的倾向种子")
+    abstract_cmd.add_argument("--limit", type=int, default=3, help="最多生成几条（默认 3）")
+
+    # v0.9.0 life snapshots
+    snapshot = commands.add_parser("snapshot", help="保存当前自我状态为人生快照")
+    snapshot.add_argument("--reason", default="", help="快照原因")
+
+    commands.add_parser("snapshots", help="列出所有人生快照")
+
+    snap_rollback = commands.add_parser("snapshot-rollback",
+                                        help="从快照恢复 SelfState")
+    snap_rollback.add_argument("snapshot_id", help="快照 ID")
+
     return parser
 
 
@@ -201,6 +224,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_json(brain.sync_persona_to_companion())
         elif args.command == "pull-persona":
             _print_json(brain.pull_persona_from_companion())
+        elif args.command == "self":
+            state = brain.get_self_state()
+            data = state.to_dict()
+            from .self_state import count_unresolved, energy_tier
+            data["energy_tier"] = energy_tier(state)
+            data["unresolved_count"] = count_unresolved(brain.store)
+            _print_json(data)
+        elif args.command == "list-dispositions":
+            _print_json(brain.list_dispositions())
+        elif args.command == "abstract-dispositions":
+            _print_json(brain.abstract_dispositions(limit=args.limit))
+        elif args.command == "snapshot":
+            _print_json({"snapshot_id": brain.take_snapshot(reason=args.reason)})
+        elif args.command == "snapshots":
+            _print_json(brain.list_snapshots())
+        elif args.command == "snapshot-rollback":
+            result = brain.rollback_to_snapshot(args.snapshot_id)
+            if result is None:
+                print(f"extra-brain: snapshot {args.snapshot_id} not found", file=sys.stderr)
+                return 1
+            _print_json(result)
         elif args.command == "rebuild":
             if args.mode == "from-log":
                 if not args.yes:
