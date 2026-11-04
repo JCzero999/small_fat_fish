@@ -1,6 +1,6 @@
 # Extra Brain（额外大脑）
 
-依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.10.0**（user_config.json 集中配置：人设 / 10 条安全规范 / API Key / 主动开口提示词），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
+依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.12.0**（方案 A 生活感补全 + 方案 B FSRS 风格牢固度），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
 
 > **文档索引**：设计规范见 `长期记忆「额外大脑」架构规范 v0.9.md`（第 10 节为实现对照）；DSH 宿主接入与跨会话验证见 `HANDOVER.md`；变更记录见 `CHANGELOG.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`；**AstrBot 挂载（当前主力）见 `../astrbot-plugin-extra-brain/README.md`；挂载到任意宿主的通用契约见 `MOUNT.md`；迭代路线图见 `MEMORY_ITERATION_PLAN.md`**。本文档位于 `docs/` 目录。
 
@@ -687,6 +687,17 @@ v0.3.0 起支持**四路召回** `search_four_paths(path=...)`：`A` 语义相�
 1. **约定到期提醒（A1）**：`SelfState.active_goals` 结构化（`ActiveGoal`），抽取时自动解析中文相对时间（明天/后天/下周X/今晚/X月X日/N小时后…）成 deadline。主动开口优先级：**到期约定** > 未平复事件 > 普通目标 > 忽然想起 > 常规维护；提醒送达后 goal 转 `reminded`（默认每日 1 次额度，防轰炸）。`/memory self` 带 deadline 与状态展示。旧库 `list[str]` 自动升级、零迁移。
 2. **忽然想起（A2）**：无更高优先级由头时，按概率（默认 20%）从非归档记忆中挑一条高重要性/带情绪的旧事，以 `[忽然想起]` 由头自然提起。同一条 7 天冷却、每日最多 2 次、安静时段不触发（`ProactiveConfig.sudden_recall_*` 全可调）。
 3. **影子模式（A3）**：`shadow_mode=True` 时自我状态与倾向照常写库（可观察演化），但不进入注入——适合「先养一段时间再放出来」的上线节奏。指令 `/memory shadow on|off|status`，CLI `extra-brain shadow`，sidecar `GET|POST /shadow`。
+
+### FSRS 风格牢固度（v0.12.0 方案 B）
+
+记忆「想起就牢、久不提就淡、淡到阈值就冻结但仍可被工具查到」。与七因子保留度**正交**：七因子管「留不留、留在哪档」；牢固度管「当前多容易被想起」。
+
+- **字段**：`stability`（稳定度，越高衰减越慢）/ `retrievability`（当前可提取度 0–1，公式 `exp(-elapsed_days / stability)`）/ `last_review` / `review_count` / `frozen`。旧库缺省安全，零迁移。
+- **想起加固**：实际进入注入上下文的记忆 `review_count+1`、`stability` 对数增长（硬顶 365）、`retrievability=1.0`、解冻；同一记忆 24h 窗口内多次想起只算一次。
+- **淡忘冻结**：巩固末尾批量衰减（6h 节流）；`retrievability < 0.35` 且非保护 → `frozen=True`。冻结记忆**不进自动注入、不当忽然想起候选**，但 `search` / `/memory list` / 按 id 查询照常返回（标注「已淡忘」）。
+- **保护项永不冻结**：`protected` / Core 引用 / 未平复情感事件 / 有效约定的关联记忆。
+- **可观测**：`/memory stats` 牢度分布与冻结数；`/memory list` 每条带牢度；`/memory freeze <id>` / `/memory unfreeze <id>` 手动控制（解冻重置 1.0）；CLI `extra-brain decay` / `freeze <id> --unfreeze`。
+- **一键关闭**：`SolidityConfig(enabled=False)` 回到 v0.11 行为。
 
 ### 编程配置
 

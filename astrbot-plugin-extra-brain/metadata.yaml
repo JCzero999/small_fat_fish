@@ -1,5 +1,5 @@
 name: astrbot_plugin_extra_brain
-desc: 长期记忆「额外大脑」——每轮注入跨会话记忆，按轮巩固对话；v0.11.0 生活感补全（约定到期提醒/忽然想起/影子模式）17 指令：status consolidate core list search stats forget proactive self shadow disposition abstract sync-persona pull-persona snapshot snapshots snapshot-rollback
-version: v0.11.0
+desc: 长期记忆「额外大脑」——每轮注入跨会话记忆，按轮巩固对话；v0.12.0 FSRS 牢固度（想起就牢/久不提就淡/淡忘可查可复）19 指令：status consolidate core list search stats forget proactive self shadow freeze unfreeze disposition abstract sync-persona pull-persona snapshot snapshots snapshot-rollback
+version: v0.12.0
 author: small_fat_fish
 repo: https://github.com/small_fat_fish/astrbot_plugin_extra_brain

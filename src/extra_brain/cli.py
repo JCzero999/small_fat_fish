@@ -131,6 +131,12 @@ def build_parser() -> argparse.ArgumentParser:
     shadow_cmd.add_argument("action", nargs="?", default="status",
                             choices=["status", "on", "off"], help="默认 status")
 
+    # v0.12.0 B 牢固度
+    commands.add_parser("decay", help="批量重算 retrievability / 冻结淡忘记忆（手动触发）")
+    freeze_cmd = commands.add_parser("freeze", help="手动冻结/解冻一条记忆")
+    freeze_cmd.add_argument("memory_id", help="记忆 ID")
+    freeze_cmd.add_argument("--unfreeze", action="store_true", help="改为解冻（默认冻结）")
+
     return parser
 
 
@@ -256,6 +262,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _print_json({"shadow_mode": brain.shadow_mode})
             else:
                 _print_json({"shadow_mode": brain.set_shadow_mode(args.action == "on")})
+        elif args.command == "decay":
+            _print_json(brain.batch_decay())
+        elif args.command == "freeze":
+            _print_json(brain.set_memory_frozen(
+                args.memory_id, frozen=not args.unfreeze))
         elif args.command == "rebuild":
             if args.mode == "from-log":
                 if not args.yes:

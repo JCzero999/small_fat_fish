@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-11-04 — v0.12.0 方案 B：FSRS 风格牢固度（想起就牢、久不提就淡） ✅
+
+### B1 数据模型 ✅
+- ✅ `SemanticMemory`/`EpisodicMemory` 新增 5 字段：`stability=1.0`（正数校验）/ `retrievability=1.0`（[0,1]）/ `last_review`（ISO8601）/ `review_count` / `frozen=False`；Core/Style 不参与
+- ✅ 旧库零迁移：JSON 列缺字段加载即用默认值，行为与加字段前一致（213 项旧测试零修改全过）
+- ✅ `is_freeze_protected`：protected / Core 引用 / 未平复情感事件 / 带 open 约定的 source 关联 → 永不自动冻结
+
+### B2 更新规则（简化 FSRS） ✅
+- ✅ 新建 `solidity.py`：`SolidityConfig`（freeze_threshold=0.35 / max_stability=365 / review_window_hours=24 / stability_gain=0.35 / decay_throttle_hours=6 / enabled=True）
+- ✅ `compute_retrievability` = exp(-elapsed_days / max(stability, 0.5))，clamp [0,1]
+- ✅ `apply_review`（想起加固）：窗口内去重仅刷 retrievability；窗口外 review_count+1、stability 对数增长（`s + gain*(1+ln1p(count))`，硬顶 365）、retrievability=1.0、解冻
+- ✅ `apply_decay_and_freeze`：时钟 last_review→last_activated→创建时间三级回退；低于阈值且非保护 → frozen
+- ✅ `ExtraBrain.batch_decay`：全库（含 companion 层）批量重算 + 写审计，返回 {updated, newly_frozen, unfrozen, skipped_protected}；`maybe_run_decay` 6h 节流（brain_settings 记时间戳）
+
+### B3 接入点 ✅
+- ✅ `build_injection` 候选池经 `exclude_frozen`（截断前过滤，冻结项不占 top-k 坑，`retriever.search`/四路全线透传）
+- ✅ 实际进入注入上下文的记忆 → `mark_memories_reviewed` 加固写回（与激活记录同点，companion id 路由各层）
+- ✅ `consolidate` 成功路径末尾自动 `maybe_run_decay`
+- ✅ `pick_sudden_recall`（A2）排除 frozen
+
+### B4 可观测性与指令 ✅
+- ✅ `storage_stats` 新增 `solidity`：高/中/低 retrievability 分布 + frozen 数量 + 平均 stability/retrievability
+- ✅ `/memory list`：冻结标「〔已淡忘〕」，其余显示「〔牢度X.Y〕」；`/memory stats` 增加牢度行
+- ✅ `/memory freeze|unfreeze <id>` 手动冻结/解冻（解冻重置 1.0）；CLI `extra-brain decay` / `freeze <id> [--unfreeze]`；sidecar `POST /freeze` / `POST /decay`
+- ✅ `SolidityConfig(enabled=False)` 一键回到 v0.11 行为（不过滤、不加固、不衰减）
+
+### 与现有体系边界（清单 §B5）✅
+- 七因子保留度＝「留不留/哪档」，牢固度＝「当前多容易被想起」，正交；冻结≠删除，search/工具/`/memory list` 仍可查到
+- 未平复事件保护优先级不变（且属冻结保护项）；约定提醒不依赖 frozen
+
+### 测试与版本 ✅
+- ✅ 新增 `tests/test_v12_features.py` 36 项：字段兼容 7 / compute 5 / review 6 / decay+freeze 4 / 保护 5 / 引擎接入 9（含节流、路由、开关回归）
+- ✅ 全量 **249 项测试绿**（213 原有零修改 + 36 新增，1 skipped）；CLI decay 冒烟通过（34 天未起的旧记忆正确冻结）
+- ✅ 版本号 `0.12.0`（pyproject / `__version__` / metadata 19 指令）；CHANGELOG / README / HANDOVER / 架构规范 §10.7 同步
+
+---
+
 ## 2026-11-04 — v0.11.0 方案 A：生活感补全（约定提醒 + 忽然想起 + 影子模式） ✅
 
 ### A1 active_goals 结构化 + 到期主动提醒 ✅

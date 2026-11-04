@@ -37,6 +37,12 @@ from .models import (
 from .retrieval import Injection, MemoryRetriever, RetrievalResult
 from .goals import get_due_goals, mark_goal_done
 from .self_state import count_unresolved, update_self_state
+from .solidity import (
+    SolidityConfig,
+    apply_decay_and_freeze,
+    apply_review,
+    is_freeze_protected,
+)
 from .disposition import match_dispositions, reinforce_dispositions
 from .storage import MemoryStore, WriteBatch
 
@@ -100,9 +106,12 @@ class ExtraBrain:
         companion_db: str | Path | None = None,
         safety_rules: list[str] | None = None,
         shadow_mode: bool | None = None,
+        solidity: SolidityConfig | None = None,
     ) -> None:
         self.config = config or MemoryConfig()
         self.read_only = bool(read_only)
+        # v0.12.0：牢固度配置（默认启用；enabled=False 时行为与 v0.11 完全一致）
+        self.solidity = solidity or SolidityConfig()
         self.embedder = embedder or LocalHashingEmbedder(self.config.embedding_dimensions)
         self.store = MemoryStore(
             db_path,
@@ -141,6 +150,7 @@ class ExtraBrain:
                 config=self.config,
                 read_only=self.read_only,
                 encryption_passphrase=encryption_passphrase,
+                solidity=self.solidity,
             )
 
     @classmethod
@@ -198,6 +208,9 @@ class ExtraBrain:
         # v0.8.0: 反熏倾向种子 — 从对话中检测认同/反对信号
         if not self.read_only and report.changed:
             reinforce_dispositions(self.store, conversation, now=now)
+        # v0.12.0 B3.3：巩固末尾批量衰减（6h 节流；只读/关闭时自动跳过）
+        if not self.read_only and report.changed:
+            self.maybe_run_decay(now=now)
         return report
 
     def _merged_core(self) -> CoreMemory:
@@ -234,6 +247,9 @@ class ExtraBrain:
         primed_ids: Sequence[str] = (),
         views: Sequence[str] = (),
         include_companion: bool = True,
+        semantic_top_k: int | None = None,
+        episodic_top_k: int | None = None,
+        exclude_frozen: bool = False,
     ) -> RetrievalResult:
         own = self._retrieve_one(
             query,
@@ -244,6 +260,9 @@ class ExtraBrain:
             path=path,
             primed_ids=primed_ids,
             views=views,
+            semantic_top_k=semantic_top_k,
+            episodic_top_k=episodic_top_k,
+            exclude_frozen=exclude_frozen,
         )
         if not include_companion or self.companion is None:
             return own
@@ -256,17 +275,22 @@ class ExtraBrain:
             path=path,
             primed_ids=primed_ids,
             views=views,
+            semantic_top_k=semantic_top_k,
+            episodic_top_k=episodic_top_k,
+            exclude_frozen=exclude_frozen,
         )
+        sem_k = semantic_top_k if semantic_top_k is not None else self.config.semantic_top_k
+        epi_k = episodic_top_k if episodic_top_k is not None else self.config.episodic_top_k
         semantic = sorted(
             [*shared.semantic, *own.semantic],
             key=lambda item: item.final_score,
             reverse=True,
-        )[: self.config.semantic_top_k]
+        )[:sem_k]
         episodic = sorted(
             [*shared.episodic, *own.episodic],
             key=lambda item: item.final_score,
             reverse=True,
-        )[: self.config.episodic_top_k]
+        )[:epi_k]
         merged = RetrievalResult(semantic=semantic, episodic=episodic)
         merged.path = f"{own.path}+companion" if shared.path == own.path else "companion"
         return merged
@@ -282,6 +306,9 @@ class ExtraBrain:
         path: str | None = None,
         primed_ids: Sequence[str] = (),
         views: Sequence[str] = (),
+        semantic_top_k: int | None = None,
+        episodic_top_k: int | None = None,
+        exclude_frozen: bool = False,
     ) -> RetrievalResult:
         if path is not None:
             return self.retriever.search_four_paths(
@@ -293,6 +320,7 @@ class ExtraBrain:
                 as_of=as_of,
                 primed_ids=primed_ids,
                 views=views,
+                exclude_frozen=exclude_frozen,
             )
         return self.retriever.search(
             query,
@@ -302,6 +330,9 @@ class ExtraBrain:
             as_of=as_of,
             primed_ids=primed_ids,
             views=views,
+            semantic_top_k=semantic_top_k,
+            episodic_top_k=episodic_top_k,
+            exclude_frozen=exclude_frozen,
         )
 
     def build_injection(
@@ -338,6 +369,7 @@ class ExtraBrain:
             primed_ids=all_primed,
             views=views,
             include_companion=include_companion,
+            exclude_frozen=self.solidity.enabled,  # v0.12.0 B3：冻结不进自动注入
         )
         core = self._merged_core() if include_companion else self.core
         injection = self.retriever.build_injection(
@@ -367,6 +399,9 @@ class ExtraBrain:
         if not self.read_only:
             moment = now or utc_now()
             ids = injection.retrieved.memory_ids
+            # v0.12.0 B3.2：实际进入注入上下文的记忆 → 触发「想起」加固
+            if self.solidity.enabled and ids:
+                self.mark_memories_reviewed(ids, now=moment)
             if self.companion is not None and include_companion:
                 companion_ids = {
                     memory.id
@@ -723,6 +758,9 @@ class ExtraBrain:
         for mem in self.store.list_episodic(include_archived=False):
             if mem.id in exclude:
                 continue
+            # v0.12.0 B3：冻结的记忆不作为「忽然想起」候选
+            if self.solidity.enabled and mem.frozen:
+                continue
             score = mem.importance
             if mem.emotions:
                 score += 0.15
@@ -732,6 +770,8 @@ class ExtraBrain:
             scored.append((score, mem))
         for mem in self.store.list_semantic(include_archived=False):
             if mem.id in exclude:
+                continue
+            if self.solidity.enabled and mem.frozen:
                 continue
             score = mem.importance + min(mem.activation_count, 5) * 0.03
             scored.append((score, mem))
@@ -970,6 +1010,143 @@ class ExtraBrain:
         local.last_updated = to_iso8601(utc_now())
         self.save_core(local)
         return {"pulled_from": str(self.companion.store.path)}
+
+    # ── v0.12.0 B：牢固度（想起加固 / 冻结过滤 / 批量衰减）──────────
+
+    def _freeze_protected_ids(self) -> tuple[set[str], set[str]]:
+        """(Core 保护 id 集, 有效约定关联 id 集)。"""
+        core_ids = set(self._merged_core().protected_memories)
+        ss = self.store.get_self_state()
+        goal_ids: set[str] = set()
+        for goal in ss.active_goals:
+            if goal.status == "open" and goal.source_memory_id:
+                goal_ids.add(goal.source_memory_id)
+        return core_ids, goal_ids
+
+    def mark_memories_reviewed(
+        self, memory_ids: Sequence[str], now: datetime | None = None
+    ) -> dict[str, Any]:
+        """对「实际进入注入上下文」的记忆调用 apply_review 并写回（走审计）。
+
+        仅加固传入 id；companion 层的 id 路由到 companion 库。只读模式跳过。
+        """
+        if self.read_only or not self.solidity.enabled:
+            return {"reviewed": 0}
+        now = now or utc_now()
+        unique_ids = list(dict.fromkeys(memory_ids))
+        reviewed = 0
+        for memory_id in unique_ids:
+            for brain in (self, self.companion):
+                if brain is None:
+                    continue
+                memory = brain.store.get_memory(memory_id)
+                if memory is None or not isinstance(
+                    memory, (SemanticMemory, EpisodicMemory)
+                ):
+                    continue
+                apply_review(memory, now, self.solidity)
+                batch = WriteBatch(
+                    operation="memory.solidity_review",
+                    semantic=[memory] if isinstance(memory, SemanticMemory) else [],
+                    episodic=[memory] if isinstance(memory, EpisodicMemory) else [],
+                )
+                brain.store.apply_batch(batch)
+                reviewed += 1
+                break
+        return {"reviewed": reviewed}
+
+    def batch_decay(
+        self, now: datetime | None = None, config: SolidityConfig | None = None
+    ) -> dict[str, Any]:
+        """批量更新本 peer（含 companion 层）所有 Semantic + Episodic 的
+        retrievability / frozen。走审计；返回 {updated, newly_frozen, skipped_protected}。"""
+        if self.read_only:
+            return {"updated": 0, "newly_frozen": 0, "skipped_protected": 0, "reason": "read_only"}
+        now = now or utc_now()
+        cfg = config or self.solidity
+        if not cfg.enabled:
+            return {"updated": 0, "newly_frozen": 0, "skipped_protected": 0, "reason": "disabled"}
+        core_ids, goal_ids = self._freeze_protected_ids()
+        try:
+            self_state = self.store.get_self_state()
+        except Exception:
+            self_state = None
+        summary = {"updated": 0, "newly_frozen": 0, "unfrozen": 0, "skipped_protected": 0}
+        for brain in (self, self.companion):
+            if brain is None:
+                continue
+            batch = WriteBatch(operation="memory.solidity_decay")
+            for mem in (
+                *brain.store.list_semantic(include_archived=False),
+                *brain.store.list_episodic(include_archived=False),
+            ):
+                if not isinstance(mem, (SemanticMemory, EpisodicMemory)):
+                    continue
+                was_frozen = mem.frozen
+                protected = is_freeze_protected(
+                    mem,
+                    self_state=self_state,
+                    core_protected_ids=core_ids,
+                    goal_source_ids=goal_ids,
+                )
+                if protected:
+                    summary["skipped_protected"] += 1
+                apply_decay_and_freeze(mem, now, cfg, protected=protected)
+                if isinstance(mem, SemanticMemory):
+                    batch.semantic.append(mem)
+                else:
+                    batch.episodic.append(mem)
+                summary["updated"] += 1
+                if not was_frozen and mem.frozen:
+                    summary["newly_frozen"] += 1
+                if was_frozen and not mem.frozen:
+                    summary["unfrozen"] += 1
+            if batch.semantic or batch.episodic:
+                brain.store.apply_batch(batch)
+        return summary
+
+    def maybe_run_decay(self, now: datetime | None = None) -> dict[str, Any] | None:
+        """巩固末尾节流入口：同一库距上次 batch_decay 不足 decay_throttle_hours 则跳过。"""
+        if self.read_only or not self.solidity.enabled:
+            return None
+        now = now or utc_now()
+        last = self.store.get_setting("last_solidity_decay", None)
+        if last:
+            try:
+                elapsed_hours = (now - parse_iso8601(last)).total_seconds() / 3600.0
+            except (MemoryValidationError, ValueError):
+                elapsed_hours = None
+            if elapsed_hours is not None and elapsed_hours < self.solidity.decay_throttle_hours:
+                return None
+        summary = self.batch_decay(now=now)
+        self.store.set_setting("last_solidity_decay", to_iso8601(now),
+                               operation="settings.solidity_decay")
+        return summary
+
+    def set_memory_frozen(
+        self, memory_id: str, *, frozen: bool, now: datetime | None = None
+    ) -> dict[str, Any]:
+        """手动冻结/解冻（B4 指令用）：直接改字段 + 解冻时 retrievability=1.0，走审计。"""
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        now = now or utc_now()
+        for brain in (self, self.companion):
+            if brain is None:
+                continue
+            memory = brain.store.get_memory(memory_id)
+            if isinstance(memory, (SemanticMemory, EpisodicMemory)):
+                memory.frozen = bool(frozen)
+                if not frozen:
+                    memory.retrievability = 1.0
+                    memory.last_review = to_iso8601(now)
+                batch = WriteBatch(
+                    operation="memory.solidity_manual",
+                    semantic=[memory] if isinstance(memory, SemanticMemory) else [],
+                    episodic=[memory] if isinstance(memory, EpisodicMemory) else [],
+                )
+                brain.store.apply_batch(batch)
+                return {"id": memory_id, "frozen": bool(frozen)}
+        raise KeyError(memory_id)
 
     # ── v0.11.0 A3 影子模式 ───────────────────────────────────────
 

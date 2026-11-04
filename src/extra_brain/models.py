@@ -315,6 +315,19 @@ class CoreMemory:
             )
 
 
+def _validate_solidity(obj: Any) -> None:
+    """v0.12.0：牢固度字段校验（Semantic/Episodic 共用）。"""
+    if isinstance(obj.stability, bool) or not isinstance(obj.stability, (int, float)) \
+            or not math.isfinite(obj.stability) or obj.stability <= 0:
+        raise MemoryValidationError("solidity.stability must be a positive finite number")
+    obj.stability = float(obj.stability)
+    obj.retrievability = _number(obj.retrievability, "solidity.retrievability")
+    if obj.last_review is not None:
+        obj.last_review = _datetime_field(obj.last_review, "solidity.last_review")
+    obj.review_count = _integer(obj.review_count, "solidity.review_count")
+    obj.frozen = _boolean(obj.frozen, "solidity.frozen")
+
+
 @dataclass(slots=True)
 class SemanticMemory:
     id: str
@@ -343,6 +356,12 @@ class SemanticMemory:
     retention_tier: int = 0            # 0=热/P5, 1=温/P4, 2=冷/P3, 3=归档/P2, 4=墓碑/P1
     # --- 多角度视角（v0.4.0 遗留，写入时确定性推导） ---
     view: str = ""                     # fact | feeling | bond | story；空=按类型/情绪自动补标
+    # --- v0.12.0 牢固度（FSRS 风格）：想起就牢、久不提就淡 ---
+    stability: float = 1.0             # 稳定度（天量级，越高衰减越慢）
+    retrievability: float = 1.0        # 当前可提取度 [0,1]
+    last_review: str | None = None     # 上次「想起」时间（ISO8601）
+    review_count: int = 0
+    frozen: bool = False               # 低于阈值后冻结（不入自动注入/忽然想起）
 
     def __post_init__(self) -> None:
         self.id = _string(self.id, "semantic.id")
@@ -386,6 +405,11 @@ class SemanticMemory:
             )
         else:
             self.view = _choice(self.view, "semantic.view", MEMORY_VIEWS)
+        self._apply_solidity_fields()
+
+    def _apply_solidity_fields(self) -> None:
+        """v0.12.0：牢固度字段校验（Semantic/Episodic 共用逻辑）。"""
+        _validate_solidity(self)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SemanticMemory:
@@ -417,6 +441,11 @@ class SemanticMemory:
             supersedes=data.get("supersedes"),
             retention_tier=data.get("retention_tier", 0),
             view=data.get("view", ""),
+            stability=data.get("stability", 1.0),
+            retrievability=data.get("retrievability", 1.0),
+            last_review=data.get("last_review"),
+            review_count=data.get("review_count", 0),
+            frozen=data.get("frozen", False),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -444,6 +473,11 @@ class SemanticMemory:
             "supersedes": self.supersedes,
             "retention_tier": self.retention_tier,
             "view": self.view,
+            "stability": self.stability,
+            "retrievability": self.retrievability,
+            "last_review": self.last_review,
+            "review_count": self.review_count,
+            "frozen": self.frozen,
         }
 
     def embedding_text(self) -> str:
@@ -476,6 +510,12 @@ class EpisodicMemory:
     retention_tier: int = 0            # 0=热/P5, 1=温/P4, 2=冷/P3, 3=归档/P2, 4=墓碑/P1
     # --- 多角度视角（v0.4.0 遗留）：情节记忆默认 story ---
     view: str = ""                     # 空=自动补标；显式值须属于 MEMORY_VIEWS
+    # --- v0.12.0 牢固度（FSRS 风格） ---
+    stability: float = 1.0
+    retrievability: float = 1.0
+    last_review: str | None = None
+    review_count: int = 0
+    frozen: bool = False
 
     def __post_init__(self) -> None:
         self.id = _string(self.id, "episodic.id")
@@ -515,6 +555,11 @@ class EpisodicMemory:
             self.view = derive_view(None, is_episodic=True)
         else:
             self.view = _choice(self.view, "episodic.view", MEMORY_VIEWS)
+        self._apply_solidity_fields()
+
+    def _apply_solidity_fields(self) -> None:
+        """v0.12.0：牢固度字段校验。"""
+        _validate_solidity(self)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> EpisodicMemory:
@@ -550,6 +595,11 @@ class EpisodicMemory:
             emotion_state=data.get("emotion_state"),
             retention_tier=data.get("retention_tier", 0),
             view=data.get("view", ""),
+            stability=data.get("stability", 1.0),
+            retrievability=data.get("retrievability", 1.0),
+            last_review=data.get("last_review"),
+            review_count=data.get("review_count", 0),
+            frozen=data.get("frozen", False),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -574,6 +624,11 @@ class EpisodicMemory:
             "emotion_state": self.emotion_state,
             "retention_tier": self.retention_tier,
             "view": self.view,
+            "stability": self.stability,
+            "retrievability": self.retrievability,
+            "last_review": self.last_review,
+            "review_count": self.review_count,
+            "frozen": self.frozen,
         }
 
     def embedding_text(self) -> str:

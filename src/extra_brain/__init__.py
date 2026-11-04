@@ -52,11 +52,19 @@ from .models import (
 )
 from .retrieval import Injection, MemoryRetriever, RetrievalResult, ScoredMemory
 from .session import SessionTracker
+from .solidity import (
+    SolidityConfig,
+    apply_decay_and_freeze,
+    apply_review,
+    compute_retrievability,
+    is_freeze_protected,
+)
 from .storage import MemoryStore, WriteBatch
 
 __all__ = [
     "ActiveGoal",
     "ActiveThread",
+    "SolidityConfig",
     "ConflictDetection",
     "ConsolidationReport",
     "ConversationMessage",
@@ -107,8 +115,12 @@ __all__ = [
     "cosine_similarity",
     "derive_view",
     "is_emotion_protected",
+    "is_freeze_protected",
     "is_unresolved_episode",
     "normalize_goal",
+    "apply_review",
+    "apply_decay_and_freeze",
+    "compute_retrievability",
 ]
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"

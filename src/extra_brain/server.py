@@ -179,6 +179,15 @@ class ExtraBrainServer:
             )
             return {"recorded": True}
 
+        if method == "POST" and route == "/freeze":
+            return self._brain(_peer(body)).set_memory_frozen(
+                _string(body.get("memory_id"), "memory_id"),
+                frozen=bool(body.get("frozen", True)),
+            )
+
+        if method == "POST" and route == "/decay":
+            return self._brain(_peer(body)).batch_decay()
+
         raise _HttpError(HTTPStatus.NOT_FOUND, f"unknown route {method} {route}")
 
     def _now_of(self, body: Mapping[str, Any]):

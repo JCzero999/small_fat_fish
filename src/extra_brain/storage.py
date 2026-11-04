@@ -1263,6 +1263,31 @@ class MemoryStore:
                 episodic_tiers.get(memory.retention_tier, 0) + 1
             )
 
+        # v0.12.0 B4：牢固度分布（高/中/低 retrievability + 冻结数量 + 平均 stability）
+        solidity = {"high": 0, "mid": 0, "low": 0, "frozen": 0,
+                    "avg_stability": 0.0, "avg_retrievability": 0.0}
+        _mem_objects = [
+            *self.list_semantic(include_archived=False),
+            *self.list_episodic(include_archived=False),
+        ]
+        if _mem_objects:
+            sol_sum = 0.0
+            ret_sum = 0.0
+            for memory in _mem_objects:
+                ret = getattr(memory, "retrievability", 1.0)
+                sol_sum = sol_sum + getattr(memory, "stability", 1.0)
+                ret_sum = ret_sum + ret
+                if getattr(memory, "frozen", False):
+                    solidity["frozen"] += 1
+                if ret >= 0.7:
+                    solidity["high"] += 1
+                elif ret >= 0.35:
+                    solidity["mid"] += 1
+                else:
+                    solidity["low"] += 1
+            solidity["avg_stability"] = round(sol_sum / len(_mem_objects), 2)
+            solidity["avg_retrievability"] = round(ret_sum / len(_mem_objects), 3)
+
         total_memories = semantic_total + episodic_total + style_total
         total_archived = semantic_archived + episodic_archived
         db_size_bytes = 0
@@ -1289,6 +1314,7 @@ class MemoryStore:
             },
             "style": {"total": style_total},
             "vectors": {"total": vector_count},
+            "solidity": solidity,
             "db_size_bytes": db_size_bytes,
         }
 

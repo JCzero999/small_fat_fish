@@ -247,6 +247,14 @@ class LocalBackend:
     def set_shadow(self, peer_id: str, enabled: bool) -> bool:
         return self._brain(peer_id).set_shadow_mode(enabled)
 
+    # ── v0.12.0 B 牢固度 ─────────────────────────────────────────
+
+    def set_frozen(self, peer_id: str, memory_id: str, *, frozen: bool) -> dict:
+        return self._brain(peer_id).set_memory_frozen(memory_id, frozen=frozen)
+
+    def run_decay(self, peer_id: str) -> dict:
+        return self._brain(peer_id).batch_decay()
+
     def set_proactive_enabled(self, peer_id: str, enabled: bool) -> bool:
         config = self._brain(peer_id).ensure_proactive_config(peer_id)
         config.enabled = enabled
@@ -396,6 +404,14 @@ class HttpBackend:
 
     def set_shadow(self, peer_id: str, enabled: bool) -> bool:
         return bool(self._post("/shadow", {"peer_id": peer_id, "enabled": enabled}).get("shadow_mode"))
+
+    # ── v0.12.0 B 牢固度 ─────────────────────────────────────────
+
+    def set_frozen(self, peer_id: str, memory_id: str, *, frozen: bool) -> dict:
+        return self._post("/freeze", {"peer_id": peer_id, "memory_id": memory_id, "frozen": frozen})
+
+    def run_decay(self, peer_id: str) -> dict:
+        return self._post("/decay", {"peer_id": peer_id})
 
     def set_proactive_enabled(self, peer_id: str, enabled: bool) -> bool:
         raise NotImplementedError("http 后端暂不支持 enable/disable，请使用 local 后端")
@@ -717,9 +733,9 @@ class ExtraBrainPlugin(star.Star):
     @filter.command_group("memory")
     def memory_group(self):
         """长期记忆管理指令组
-        v0.11.0 全指令：status consolidate core list search stats forget
-        proactive self shadow disposition abstract sync-persona pull-persona
-        snapshot snapshots snapshot-rollback
+        v0.12.0 全指令：status consolidate core list search stats forget
+        proactive self shadow freeze unfreeze disposition abstract sync-persona
+        pull-persona snapshot snapshots snapshot-rollback
         """
 
     @memory_group.command("status")
@@ -800,13 +816,20 @@ class ExtraBrainPlugin(star.Star):
             return
         lines = [f"共 {len(items)} 条 {kind} 记忆："]
         for item in items[:20]:
+            # v0.12.0：冻结（淡忘）标注 + retrievability 一位小数
+            faded = ""
+            if kind in ("semantic", "episodic"):
+                if item.get("frozen"):
+                    faded = " 〔已淡忘〕"
+                elif "retrievability" in item:
+                    faded = f" 〔牢度{float(item['retrievability']):.1f}〕"
             if kind == "semantic":
                 lines.append(
                     f"[{item['id']}] {item['type']} "
-                    f"{item['subject']}/{item['predicate']}/{item['object']}"
+                    f"{item['subject']}/{item['predicate']}/{item['object']}{faded}"
                 )
             elif kind == "episodic":
-                lines.append(f"[{item['id']}] {item['timestamp'][:10]} {item['summary']}")
+                lines.append(f"[{item['id']}] {item['timestamp'][:10]} {item['summary']}{faded}")
             else:
                 lines.append(f"[{item['id']}] {item['category']} {item['observation']}")
         if len(items) > 20:
@@ -863,19 +886,25 @@ class ExtraBrainPlugin(star.Star):
             )
         semantic = stats.get("semantic", {})
         episodic = stats.get("episodic", {})
-        yield event.plain_result(
-            "\n".join(
-                [
-                    "记忆库分层统计",
-                    f"总量：{stats.get('total_memories')} 条（归档 {stats.get('total_archived')}，"
-                    f"比例 {round(float(stats.get('archive_ratio', 0)) * 100, 1)}%）",
-                    f"语义：{semantic.get('total')} 条 | {tier_line(semantic.get('tiers', {}))}",
-                    f"情节：{episodic.get('total')} 条 | {tier_line(episodic.get('tiers', {}))}",
-                    f"风格：{stats.get('style', {}).get('total')} 条 | 向量 {stats.get('vectors', {}).get('total')} 个",
-                    f"库体积：{round(int(stats.get('db_size_bytes', 0)) / 1024, 1)} KB",
-                ]
+        solidity = stats.get("solidity") or {}
+        solidity_line = ""
+        if solidity:
+            solidity_line = (
+                f"牢度：高 {solidity.get('high', 0)} / 中 {solidity.get('mid', 0)} / "
+                f"低 {solidity.get('low', 0)} · 已淡忘 {solidity.get('frozen', 0)}"
             )
-        )
+        lines = [
+            "记忆库分层统计",
+            f"总量：{stats.get('total_memories')} 条（归档 {stats.get('total_archived')}，"
+            f"比例 {round(float(stats.get('archive_ratio', 0)) * 100, 1)}%）",
+            f"语义：{semantic.get('total')} 条 | {tier_line(semantic.get('tiers', {}))}",
+            f"情节：{episodic.get('total')} 条 | {tier_line(episodic.get('tiers', {}))}",
+            f"风格：{stats.get('style', {}).get('total')} 条 | 向量 {stats.get('vectors', {}).get('total')} 个",
+        ]
+        if solidity_line:
+            lines.append(solidity_line)
+        lines.append(f"库体积：{round(int(stats.get('db_size_bytes', 0)) / 1024, 1)} KB")
+        yield event.plain_result("\n".join(lines))
 
     @memory_group.command("forget")
     async def memory_forget(self, event: AstrMessageEvent, args: GreedyStr):
@@ -1070,6 +1099,39 @@ class ExtraBrainPlugin(star.Star):
             yield event.plain_result("当前为只读模式，无法切换")
         except Exception as exc:
             yield event.plain_result(f"操作失败：{exc}")
+
+    # ── v0.12.0 B /memory freeze / unfreeze ──────────────────────
+
+    @memory_group.command("freeze")
+    async def memory_freeze(self, event: AstrMessageEvent, memory_id: str = ""):
+        """手动冻结一条记忆（淡忘：不进自动注入，搜索仍可查到）"""
+        await self._set_frozen(event, memory_id, frozen=True)
+
+    @memory_group.command("unfreeze")
+    async def memory_unfreeze(self, event: AstrMessageEvent, memory_id: str = ""):
+        """手动解冻一条记忆（retrievability 重置为 1.0）"""
+        await self._set_frozen(event, memory_id, frozen=False)
+
+    async def _set_frozen(self, event: AstrMessageEvent, memory_id: str, *, frozen: bool):
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        if not (memory_id or "").strip():
+            yield event.plain_result("用法：/memory freeze|unfreeze <记忆ID>")
+            return
+        try:
+            result = await asyncio.to_thread(
+                backend.set_frozen, self._peer_of(event), memory_id.strip(), frozen=frozen
+            )
+        except KeyError:
+            yield event.plain_result(f"未找到记忆：{memory_id}（仅支持 semantic/episodic）")
+            return
+        except Exception as exc:
+            yield event.plain_result(f"操作失败：{exc}")
+            return
+        state = "已淡忘（冻结）" if result.get("frozen") else "已恢复（牢度重置 1.0）"
+        yield event.plain_result(f"[{result.get('id')}] {state}")
 
     # ── v0.8.0 /memory disposition / abstract ────────────────────
 
