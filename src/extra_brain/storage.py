@@ -278,6 +278,12 @@ class MemoryStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_life_snapshots_time
                     ON life_snapshots(created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS brain_settings (
+                    key TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -338,6 +344,38 @@ class MemoryStore:
             self._connection.execute(
                 "INSERT OR REPLACE INTO self_state (singleton, data) VALUES (1, ?)",
                 (payload,),
+            )
+
+    # ── v0.11.0 A3: brain_settings（键值设置，含审计）────────────────
+
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT data FROM brain_settings WHERE key = ?", (key,)
+            ).fetchone()
+        if row is None:
+            return default
+        try:
+            return json.loads(self._decrypt(row["data"]))
+        except (ValueError, json.JSONDecodeError):
+            return default
+
+    def set_setting(self, key: str, value: Any, *, operation: str = "settings.write") -> None:
+        payload = self._encrypt(json.dumps(value, ensure_ascii=False))
+        with self._lock, self._connection:
+            before = self._connection.execute(
+                "SELECT data FROM brain_settings WHERE key = ?", (key,)
+            ).fetchone()
+            self._connection.execute(
+                "INSERT OR REPLACE INTO brain_settings (key, data, updated_at) VALUES (?, ?, ?)",
+                (key, payload, to_iso8601(utc_now())),
+            )
+            self._audit(
+                WriteBatch(operation=operation, transaction_id=uuid4().hex),
+                "setting",
+                key,
+                before["data"] if before else None,
+                payload,
             )
 
     # ── v0.8.0 DispositionSeed ─────────────────────────────────────

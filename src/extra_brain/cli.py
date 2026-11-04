@@ -125,6 +125,12 @@ def build_parser() -> argparse.ArgumentParser:
                                         help="从快照恢复 SelfState")
     snap_rollback.add_argument("snapshot_id", help="快照 ID")
 
+    # v0.11.0 A3 影子模式
+    shadow_cmd = commands.add_parser("shadow",
+                                     help="影子模式：status|on|off（SelfState/倾向记录但不注入）")
+    shadow_cmd.add_argument("action", nargs="?", default="status",
+                            choices=["status", "on", "off"], help="默认 status")
+
     return parser
 
 
@@ -245,6 +251,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"extra-brain: snapshot {args.snapshot_id} not found", file=sys.stderr)
                 return 1
             _print_json(result)
+        elif args.command == "shadow":
+            if args.action == "status":
+                _print_json({"shadow_mode": brain.shadow_mode})
+            else:
+                _print_json({"shadow_mode": brain.set_shadow_mode(args.action == "on")})
         elif args.command == "rebuild":
             if args.mode == "from-log":
                 if not args.yes:

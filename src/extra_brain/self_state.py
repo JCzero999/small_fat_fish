@@ -17,6 +17,7 @@ from typing import Any
 
 from .consolidation import ConsolidationReport
 from .models import (
+    ActiveGoal,
     EpisodicMemory,
     SelfState,
     is_unresolved_episode,
@@ -74,7 +75,7 @@ def update_self_state(
     mood = _derive_mood(store, prev.mood_baseline)
 
     # ── 3. active_goals ──────────────────────────────────────────
-    goals = _extract_goals(store, list(prev.active_goals))
+    goals = _extract_goals(store, list(prev.active_goals), now)
 
     # ── 4. unresolved ────────────────────────────────────────────
     _sync_unresolved(store)
@@ -223,21 +224,25 @@ def _derive_mood(
 
 def _extract_goals(
     store: MemoryStore,
-    existing: list[str],
-) -> list[str]:
-    """从高 importance 语义记忆中抽取目标，上限 5。"""
-    semantic = store.list_semantic(include_archived=False)
-    goals: list[str] = list(existing)
+    existing: list[ActiveGoal],
+    now: datetime,
+) -> list[ActiveGoal]:
+    """从高 importance 语义记忆中抽取/合并目标（v0.11.0：结构化 + deadline）。"""
+    from .goals import extract_goals_from_report, update_goal_statuses
 
+    semantic = store.list_semantic(include_archived=False)
+    candidates: list[str] = []
+    source_texts: dict[str, str] = {}
     for mem in semantic:
         if mem.importance >= 0.7:
             goal_text = f"{mem.subject}：{mem.predicate} {mem.object}".strip()
             if len(goal_text) > 40:
                 goal_text = goal_text[:37] + "..."
-            if goal_text not in goals:
-                goals.append(goal_text)
+            candidates.append(goal_text)
+            source_texts[goal_text] = f"{mem.subject} {mem.predicate} {mem.object}"
 
-    return goals[:5]
+    merged = extract_goals_from_report(candidates, existing, now, source_texts=source_texts)
+    return update_goal_statuses(merged, now)
 
 
 def _sync_unresolved(store: MemoryStore) -> None:
@@ -262,7 +267,7 @@ def _maybe_update_narrative(
     prev_narrative: str,
     energy: float,
     mood: str,
-    goals: list[str],
+    goals: list[ActiveGoal],
     now: datetime,
 ) -> str:
     """仅在有显著变化时才更新 self_narrative。"""
@@ -270,7 +275,8 @@ def _maybe_update_narrative(
         return _build_simple_narrative(energy, mood, goals)
 
     narrative = prev_narrative
-    goals_changed = not any(g in prev_narrative for g in goals) and goals
+    goal_texts = [g.text for g in goals]
+    goals_changed = not any(t in prev_narrative for t in goal_texts) and goal_texts
 
     if goals_changed:
         narrative = _build_simple_narrative(energy, mood, goals)
@@ -278,7 +284,7 @@ def _maybe_update_narrative(
     return narrative
 
 
-def _build_simple_narrative(energy: float, mood: str, goals: list[str]) -> str:
+def _build_simple_narrative(energy: float, mood: str, goals: list[ActiveGoal]) -> str:
     """构建规则版自我叙事（≤80 字）。"""
     energy_label = (
         "精力充沛" if energy >= 0.75
@@ -290,7 +296,7 @@ def _build_simple_narrative(energy: float, mood: str, goals: list[str]) -> str:
     goals_part = ""
     if goals:
         g = goals[0]
-        goals_part = f"；惦记着「{g[:20]}」"
+        goals_part = f"；惦记着「{g.text[:20]}」"
     narrative = f"我{energy_label}{mood_part}{goals_part}。"
     return narrative[:80]
 

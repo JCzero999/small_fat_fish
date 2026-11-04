@@ -965,11 +965,116 @@ class MemoryAssociation:
         return estimate_tokens(self.to_dict())
 
 
+# ── v0.11.0 ActiveGoal（A1）──────────────────────────────────────
+
+GOAL_STATUSES = ("open", "reminded", "done", "expired")
+
+
+@dataclass(slots=True)
+class ActiveGoal:
+    """v0.11.0：结构化约定/目标，支持 deadline 与到期提醒状态机。
+
+    兼容旧库：纯字符串目标等价于 ``ActiveGoal(text=s)``（open、无 deadline）。
+    """
+
+    text: str
+    deadline: str | None = None          # ISO8601（带时区），无则 None
+    created_at: str = ""
+    source_memory_id: str | None = None
+    status: str = "open"                 # open | reminded | done | expired
+    id: str = ""
+
+    def __post_init__(self) -> None:
+        self.text = _string(self.text, "goal.text")[:80]
+        self.status = _choice(self.status, "goal.status", GOAL_STATUSES)
+        if self.deadline is not None and self.deadline != "":
+            self.deadline = to_iso8601(parse_iso8601(self.deadline))
+        else:
+            self.deadline = None
+        if not self.id:
+            self.id = new_memory_id("goal")
+        else:
+            self.id = _string(self.id, "goal.id")
+        self.created_at = _string(self.created_at, "goal.created_at", allow_empty=True)
+        if self.source_memory_id is not None:
+            self.source_memory_id = _string(
+                self.source_memory_id, "goal.source_memory_id"
+            )
+
+    # ── 兼容旧行为：与字符串相等、str() 即 text ──
+    def __str__(self) -> str:
+        return self.text
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, ActiveGoal):
+            return self.text == other.text
+        if isinstance(other, str):
+            return self.text == other
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self.text)
+
+    @property
+    def plain(self) -> bool:
+        """无 deadline 且仍 open 的目标可降级为纯字符串序列化（兼容旧数据格式）。"""
+        return self.deadline is None and self.status == "open"
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any] | str) -> ActiveGoal:
+        if isinstance(data, str):
+            return cls(text=data)
+        data = _mapping(data, "goal")
+        return cls(
+            text=data["text"],
+            deadline=data.get("deadline"),
+            created_at=data.get("created_at", ""),
+            source_memory_id=data.get("source_memory_id"),
+            status=data.get("status", "open"),
+            id=data.get("id", ""),
+        )
+
+    def to_dict(self, *, compact: bool = True) -> Any:
+        if compact and self.plain:
+            return self.text
+        return {
+            "id": self.id,
+            "text": self.text,
+            "deadline": self.deadline,
+            "created_at": self.created_at,
+            "source_memory_id": self.source_memory_id,
+            "status": self.status,
+        }
+
+    def is_due(self, now: datetime) -> bool:
+        return (
+            self.status == "open"
+            and self.deadline is not None
+            and parse_iso8601(self.deadline) <= now
+        )
+
+    @property
+    def deadline_dt(self) -> datetime | None:
+        return parse_iso8601(self.deadline) if self.deadline else None
+
+
+def normalize_goal(value: Any) -> ActiveGoal:
+    """str / dict / ActiveGoal 统一转为 ActiveGoal（旧库兼容入口）。"""
+    if isinstance(value, ActiveGoal):
+        return value
+    if isinstance(value, str):
+        return ActiveGoal(text=value)
+    if isinstance(value, Mapping):
+        return ActiveGoal.from_dict(value)
+    raise MemoryValidationError("goal must be a string, object, or ActiveGoal")
+
+
 @dataclass(slots=True)
 class ProactiveConfig:
     """v0.4.0 主动开口配置：频率/静默/每日上限/由头选择。
 
     有由头才生成给模型的提示，台词由模型自己说。
+    v0.11.0 新增：约定提醒额度（A1）与「忽然想起」（A2）配置与计数器。
     """
 
     id: str
@@ -985,6 +1090,18 @@ class ProactiveConfig:
     daily_reset_date: str | None = None
     last_umo: str | None = None  # 宿主会话路由（主动开口的发送目标），由适配器更新
     created_at: str | None = None
+    # ── v0.11.0 A1：到期约定提醒 ──
+    goal_reminder_daily_limit: int = 1
+    goal_reminder_count: int = 0
+    goal_reminder_reset_date: str | None = None
+    # ── v0.11.0 A2：忽然想起 ──
+    sudden_recall_enabled: bool = True
+    sudden_recall_daily_limit: int = 2
+    sudden_recall_cooldown_days: int = 7
+    sudden_recall_probability: float = 0.20
+    sudden_recall_count: int = 0
+    sudden_recall_reset_date: str | None = None
+    sudden_recall_log: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.id = _string(self.id, "proactive.id")
@@ -1022,6 +1139,39 @@ class ProactiveConfig:
             self.created_at = _datetime_field(
                 self.created_at, "proactive.created_at"
             )
+        # ── v0.11.0 A1 ──
+        self.goal_reminder_daily_limit = _integer(
+            self.goal_reminder_daily_limit, "proactive.goal_reminder_daily_limit"
+        )
+        self.goal_reminder_count = _integer(
+            self.goal_reminder_count, "proactive.goal_reminder_count"
+        )
+        if self.goal_reminder_reset_date is not None:
+            self.goal_reminder_reset_date = _string(
+                self.goal_reminder_reset_date, "proactive.goal_reminder_reset_date"
+            )
+        # ── v0.11.0 A2 ──
+        self.sudden_recall_enabled = _boolean(
+            self.sudden_recall_enabled, "proactive.sudden_recall_enabled"
+        )
+        self.sudden_recall_daily_limit = _integer(
+            self.sudden_recall_daily_limit, "proactive.sudden_recall_daily_limit"
+        )
+        self.sudden_recall_cooldown_days = _integer(
+            self.sudden_recall_cooldown_days, "proactive.sudden_recall_cooldown_days"
+        )
+        self.sudden_recall_probability = _number(
+            self.sudden_recall_probability, "proactive.sudden_recall_probability"
+        )
+        self.sudden_recall_count = _integer(
+            self.sudden_recall_count, "proactive.sudden_recall_count"
+        )
+        if self.sudden_recall_reset_date is not None:
+            self.sudden_recall_reset_date = _string(
+                self.sudden_recall_reset_date, "proactive.sudden_recall_reset_date"
+            )
+        if not isinstance(self.sudden_recall_log, list):
+            raise MemoryValidationError("proactive.sudden_recall_log must be an array")
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ProactiveConfig:
@@ -1040,6 +1190,16 @@ class ProactiveConfig:
             daily_reset_date=data.get("daily_reset_date"),
             last_umo=data.get("last_umo"),
             created_at=data.get("created_at"),
+            goal_reminder_daily_limit=data.get("goal_reminder_daily_limit", 1),
+            goal_reminder_count=data.get("goal_reminder_count", 0),
+            goal_reminder_reset_date=data.get("goal_reminder_reset_date"),
+            sudden_recall_enabled=data.get("sudden_recall_enabled", True),
+            sudden_recall_daily_limit=data.get("sudden_recall_daily_limit", 2),
+            sudden_recall_cooldown_days=data.get("sudden_recall_cooldown_days", 7),
+            sudden_recall_probability=data.get("sudden_recall_probability", 0.20),
+            sudden_recall_count=data.get("sudden_recall_count", 0),
+            sudden_recall_reset_date=data.get("sudden_recall_reset_date"),
+            sudden_recall_log=list(data.get("sudden_recall_log", [])),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1057,6 +1217,16 @@ class ProactiveConfig:
             "daily_reset_date": self.daily_reset_date,
             "last_umo": self.last_umo,
             "created_at": self.created_at,
+            "goal_reminder_daily_limit": self.goal_reminder_daily_limit,
+            "goal_reminder_count": self.goal_reminder_count,
+            "goal_reminder_reset_date": self.goal_reminder_reset_date,
+            "sudden_recall_enabled": self.sudden_recall_enabled,
+            "sudden_recall_daily_limit": self.sudden_recall_daily_limit,
+            "sudden_recall_cooldown_days": self.sudden_recall_cooldown_days,
+            "sudden_recall_probability": self.sudden_recall_probability,
+            "sudden_recall_count": self.sudden_recall_count,
+            "sudden_recall_reset_date": self.sudden_recall_reset_date,
+            "sudden_recall_log": list(self.sudden_recall_log),
         }
 
     @property
@@ -1077,7 +1247,7 @@ class SelfState:
 
     energy: float = 0.85                     # 0.0–1.0
     mood_baseline: str = "平静"              # 当前底色情绪
-    active_goals: list[str] = field(default_factory=list)  # ≤5
+    active_goals: list[ActiveGoal] = field(default_factory=list)  # ≤5（v0.11.0 结构化）
     self_narrative: str = ""                 # ≤80 字
     last_significant_event_id: str | None = None
     fatigue_reason: str | None = None        # v0.9.0: 最近 energy 下降的原因
@@ -1093,7 +1263,10 @@ class SelfState:
             raise MemoryValidationError("self_state.energy must be a valid number")
         self.energy = max(self._ENERGY_MIN, min(self._ENERGY_MAX, self.energy))
         self.mood_baseline = _string(self.mood_baseline, "self_state.mood_baseline")
-        self.active_goals = _string_list(self.active_goals, "self_state.active_goals")[:5]
+        # v0.11.0：兼容旧库 list[str] —— 元素自动升级为 ActiveGoal(text=...)
+        self.active_goals = [
+            normalize_goal(item) for item in self.active_goals
+        ][:5]
         self.self_narrative = _string(
             self.self_narrative, "self_state.self_narrative", allow_empty=True
         )
@@ -1127,10 +1300,11 @@ class SelfState:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        # v0.11.0：无 deadline 的 open 目标序列化为纯字符串（旧格式兼容）
         return {
             "energy": self.energy,
             "mood_baseline": self.mood_baseline,
-            "active_goals": list(self.active_goals),
+            "active_goals": [goal.to_dict(compact=True) for goal in self.active_goals],
             "self_narrative": self.self_narrative,
             "last_significant_event_id": self.last_significant_event_id,
             "fatigue_reason": self.fatigue_reason,

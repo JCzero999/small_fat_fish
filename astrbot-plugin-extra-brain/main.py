@@ -162,6 +162,7 @@ class LocalBackend:
                 extractor=extractor,
                 companion_db=self._companion_db or None,
                 safety_rules=self._user_config.get("safety_rules"),
+                shadow_mode=bool(self._user_config.get("shadow_mode", False)),
             )
             # 覆盖 Identity：在创建后写入 Core
             if identity_override:
@@ -233,6 +234,18 @@ class LocalBackend:
 
     def proactive_record(self, peer_id: str, now, umo: str | None = None) -> None:
         self._brain(peer_id).record_proactive_open(peer_id, now=now, umo=umo)
+
+    def confirm_goal(self, peer_id: str, goal_id: str, now) -> bool:
+        return self._brain(peer_id).confirm_goal_reminder(peer_id, goal_id, now=now)
+
+    def confirm_sudden(self, peer_id: str, memory_id: str, now) -> None:
+        self._brain(peer_id).confirm_sudden_recall(peer_id, memory_id, now=now)
+
+    def shadow_status(self, peer_id: str) -> bool:
+        return self._brain(peer_id).shadow_mode
+
+    def set_shadow(self, peer_id: str, enabled: bool) -> bool:
+        return self._brain(peer_id).set_shadow_mode(enabled)
 
     def set_proactive_enabled(self, peer_id: str, enabled: bool) -> bool:
         config = self._brain(peer_id).ensure_proactive_config(peer_id)
@@ -361,6 +374,28 @@ class HttpBackend:
         if umo is not None:
             body["umo"] = umo
         self._post("/proactive_record", body)
+
+    def confirm_goal(self, peer_id: str, goal_id: str, now) -> bool:
+        from datetime import timezone as _tz
+
+        body: dict[str, Any] = {"peer_id": peer_id, "goal_id": goal_id}
+        if now is not None:
+            body["now"] = now.astimezone(_tz.utc).isoformat()
+        return bool(self._post("/confirm_goal", body).get("marked"))
+
+    def confirm_sudden(self, peer_id: str, memory_id: str, now) -> None:
+        from datetime import timezone as _tz
+
+        body: dict[str, Any] = {"peer_id": peer_id, "memory_id": memory_id}
+        if now is not None:
+            body["now"] = now.astimezone(_tz.utc).isoformat()
+        self._post("/confirm_sudden", body)
+
+    def shadow_status(self, peer_id: str) -> bool:
+        return bool(self._get(f"/shadow?peer_id={urllib.request.quote(peer_id)}").get("shadow_mode"))
+
+    def set_shadow(self, peer_id: str, enabled: bool) -> bool:
+        return bool(self._post("/shadow", {"peer_id": peer_id, "enabled": enabled}).get("shadow_mode"))
 
     def set_proactive_enabled(self, peer_id: str, enabled: bool) -> bool:
         raise NotImplementedError("http 后端暂不支持 enable/disable，请使用 local 后端")
@@ -576,6 +611,15 @@ class ExtraBrainPlugin(star.Star):
                 continue
             try:
                 await asyncio.to_thread(backend.proactive_record, peer_id, now, umo)
+                # v0.11.0：约定提醒 / 忽然想起投递确认（计入额度与冷却）
+                if decision.get("goal_id"):
+                    await asyncio.to_thread(
+                        backend.confirm_goal, peer_id, decision["goal_id"], now
+                    )
+                if decision.get("sudden_recall_id"):
+                    await asyncio.to_thread(
+                        backend.confirm_sudden, peer_id, decision["sudden_recall_id"], now
+                    )
             except Exception as exc:
                 logger.warning(f"extra-brain: 开口记录失败（peer={peer_id}）：{exc}")
             logger.info(f"extra-brain: 主动开口 peer={peer_id} 内容={line[:40]}")
@@ -673,8 +717,8 @@ class ExtraBrainPlugin(star.Star):
     @filter.command_group("memory")
     def memory_group(self):
         """长期记忆管理指令组
-        v0.9.0 全指令：status consolidate core list search stats forget
-        proactive self disposition abstract sync-persona pull-persona
+        v0.11.0 全指令：status consolidate core list search stats forget
+        proactive self shadow disposition abstract sync-persona pull-persona
         snapshot snapshots snapshot-rollback
         """
 
@@ -955,9 +999,29 @@ class ExtraBrainPlugin(star.Star):
         else:
             energy_label = "很疲惫"
         goals = state.get("active_goals", [])
-        goals_text = "\n".join(f"  · {g}" for g in goals) if goals else "  · （暂无特别惦记的事）"
+
+        def goal_line(g) -> str:
+            if isinstance(g, dict):
+                text = g.get("text", "")
+                deadline = g.get("deadline")
+                status = g.get("status", "open")
+                if deadline:
+                    try:
+                        local = datetime.fromisoformat(deadline.replace("Z", "+00:00")).astimezone()
+                        return f"  · {text}（约定 {local:%m月%d日%H:%M}｜{status}）"
+                    except ValueError:
+                        return f"  · {text}（约定 {deadline}｜{status}）"
+                return f"  · {text}（{status}）" if status != "open" else f"  · {g.get('text', '')}"
+            return f"  · {g}"
+
+        goals_text = "\n".join(goal_line(g) for g in goals) if goals else "  · （暂无特别惦记的事）"
         fatigue = state.get("fatigue_reason")
         fatigue_text = f"最近疲惫原因：{fatigue}\n" if fatigue else ""
+        try:
+            shadow = await asyncio.to_thread(backend.shadow_status, self._peer_of(event))
+        except Exception:
+            shadow = False
+        shadow_tag = "（影子模式：已记录，未注入）" if shadow else ""
         yield event.plain_result(
             "\n".join([
                 "【这一刻的自己】",
@@ -967,9 +1031,45 @@ class ExtraBrainPlugin(star.Star):
                 f"我在意的事：",
                 goals_text,
                 f"自我叙事：{state.get('self_narrative') or '（尚无）'}",
-                f"版本：{state.get('version', 1)}",
+                f"版本：{state.get('version', 1)}{shadow_tag}",
             ]).rstrip()
         )
+
+    # ── v0.11.0 /memory shadow ────────────────────────────────────
+
+    @memory_group.command("shadow")
+    async def memory_shadow(self, event: AstrMessageEvent, action: str = "status"):
+        """影子模式：SelfState/倾向照常记录但不注入（on|off|status）"""
+        backend = self._backend_or_none()
+        if backend is None:
+            yield event.plain_result("后端不可用")
+            return
+        peer_id = self._peer_of(event)
+        act = (action or "status").strip().lower()
+        try:
+            if act in ("on", "开启", "开"):
+                enabled = await asyncio.to_thread(backend.set_shadow, peer_id, True)
+                yield event.plain_result(
+                    "影子模式已开启：自我状态照常记录，但不再注入到对话（记忆/人设不受影响）。"
+                    if enabled else "切换失败"
+                )
+                return
+            if act in ("off", "关闭", "关"):
+                enabled = await asyncio.to_thread(backend.set_shadow, peer_id, False)
+                yield event.plain_result(
+                    "影子模式已关闭：从下一轮起注入【这一刻的自己】与内在声音。"
+                    if not enabled else "切换失败"
+                )
+                return
+            shadow = await asyncio.to_thread(backend.shadow_status, peer_id)
+            yield event.plain_result(
+                "影子模式：" + ("开（已记录，未注入）" if shadow else "关（正常注入）")
+                + "\n切换：/memory shadow on|off"
+            )
+        except PermissionError:
+            yield event.plain_result("当前为只读模式，无法切换")
+        except Exception as exc:
+            yield event.plain_result(f"操作失败：{exc}")
 
     # ── v0.8.0 /memory disposition / abstract ────────────────────
 

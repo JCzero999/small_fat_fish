@@ -25,5 +25,6 @@
   },
   "proactive": {
     "system_prompt": "你在主动开启一段对话，像惦记朋友一样自然提起，只输出要发送的那句话本身。"
-  }
+  },
+  "shadow_mode": false
 }

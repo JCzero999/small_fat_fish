@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -20,6 +20,7 @@ from .models import (
     DispositionSeed,
     MemoryAssociation,
     Memory,
+    MemoryValidationError,
     NarrativeLayer,
     ProactiveConfig,
     RelationshipModel,
@@ -34,13 +35,14 @@ from .models import (
     utc_now,
 )
 from .retrieval import Injection, MemoryRetriever, RetrievalResult
+from .goals import get_due_goals, mark_goal_done
 from .self_state import count_unresolved, update_self_state
 from .disposition import match_dispositions, reinforce_dispositions
 from .storage import MemoryStore, WriteBatch
 
 
 def _format_self_state_block(ss: SelfState, unresolved_count: int = 0) -> str:
-    """把 SelfState 变成注入段落（v0.9.0: 含疲劳与未平复心结）。"""
+    """把 SelfState 变成注入段落（v0.9.0: 含疲劳与未平复心结；v0.11.0: 目标带 deadline）。"""
     if not ss.updated_at:
         return ""  # 从未初始化，不输出
     if ss.energy >= 0.75:
@@ -51,7 +53,18 @@ def _format_self_state_block(ss: SelfState, unresolved_count: int = 0) -> str:
         energy_label = "有点累了，回复可能会变短"
     else:
         energy_label = "很疲惫，只想简短回应"
-    goals_lines = "\n".join(f"  · {g}" for g in ss.active_goals) if ss.active_goals else "  · （暂无特别惦记的事）"
+
+    def goal_line(g) -> str:
+        deadline = getattr(g, "deadline", None)
+        if deadline:
+            try:
+                local = parse_iso8601(deadline).astimezone()
+                return f"  · {g.text}（约定 {local:%m月%d日%H:%M}）"
+            except (MemoryValidationError, ValueError, OSError):
+                pass
+        return f"  · {g.text}" if hasattr(g, "text") else f"  · {g}"
+
+    goals_lines = "\n".join(goal_line(g) for g in ss.active_goals) if ss.active_goals else "  · （暂无特别惦记的事）"
     narrative = ss.self_narrative or "（尚无）"
     lines = [
         "【这一刻的自己】",
@@ -86,6 +99,7 @@ class ExtraBrain:
         encryption_passphrase: str | None = None,
         companion_db: str | Path | None = None,
         safety_rules: list[str] | None = None,
+        shadow_mode: bool | None = None,
     ) -> None:
         self.config = config or MemoryConfig()
         self.read_only = bool(read_only)
@@ -95,6 +109,13 @@ class ExtraBrain:
             core_token_limit=self.config.core_token_limit,
             encryption_passphrase=encryption_passphrase,
         )
+        # v0.11.0 A3：影子模式。库里存的一次开关优先于构造参数；
+        # 都没有时默认 False（与 v0.10 注入行为完全一致，不破坏现有语义）。
+        stored = self.store.get_setting("shadow_mode", None)
+        if stored is None:
+            self._shadow_mode = bool(shadow_mode) if shadow_mode is not None else False
+        else:
+            self._shadow_mode = bool(stored)
         self.indexer = MemoryIndexer(self.embedder)
         self.retriever = MemoryRetriever(self.store, self.embedder, self.config)
         self.extractor = extractor
@@ -322,14 +343,15 @@ class ExtraBrain:
         injection = self.retriever.build_injection(
             core, retrieved, token_limit=token_limit
         )
-        # v0.7.0: 在最前面插入 SelfState 段落
+        # v0.7.0: 在最前面插入 SelfState 段落（v0.11.0 A3：影子模式下跳过注入）
         ss = self.store.get_self_state()
         unres = count_unresolved(self.store)
-        self_block = _format_self_state_block(ss, unresolved_count=unres)
-        if self_block:
-            injection.context = self_block + "\n\n" + injection.context
-        # v0.8.0: 内在声音 — 在 SelfState 之后、Core 之前插入
-        if inner_voice:
+        if not self._shadow_mode:
+            self_block = _format_self_state_block(ss, unresolved_count=unres)
+            if self_block:
+                injection.context = self_block + "\n\n" + injection.context
+        # v0.8.0: 内在声音 — 在 SelfState 之后、Core 之前插入（影子模式下跳过）
+        if inner_voice and not self._shadow_mode:
             injection.context = (
                 "【内在声音】" + inner_voice + "\n\n" + injection.context
             )
@@ -592,6 +614,18 @@ class ExtraBrain:
             config.last_umo = umo
         self.save_proactive_config(config)
 
+    def confirm_goal_reminder(self, user_id: str, goal_id: str, now: datetime | None = None) -> bool:
+        """约定提醒投递成功后：goal → reminded + 计入当日提醒额度。"""
+        now = now or utc_now()
+        hit = self.mark_goal_reminded(goal_id, now=now)
+        if hit:
+            self._bump_goal_reminder_count(user_id, now)
+        return hit
+
+    def confirm_sudden_recall(self, user_id: str, memory_id: str, now: datetime | None = None) -> None:
+        """忽然想起投递成功后：计入冷却与每日额度。"""
+        self.record_sudden_recall(user_id, memory_id, now=now)
+
     def ensure_proactive_config(self, user_id: str) -> ProactiveConfig:
         """没有配置就按默认值建一份（宿主启用主动开口时的引导调用）。"""
         existing = self.get_proactive_config_by_user(user_id)
@@ -600,6 +634,138 @@ class ExtraBrain:
         config = ProactiveConfig(id=new_memory_id("pa"), user_id=user_id)
         self.save_proactive_config(config)
         return config
+
+    # ── v0.11.0 A1：到期约定提醒 ──────────────────────────────────
+
+    def mark_goal_reminded(self, goal_id: str, now: datetime | None = None) -> bool:
+        """投递成功后把对应 goal 置 reminded（防重复轰炸）。返回是否命中。"""
+        if self.read_only:
+            return False
+        now = now or utc_now()
+        ss = self.store.get_self_state()
+        hit = False
+        for g in ss.active_goals:
+            if g.id == goal_id and g.status == "open":
+                g.status = "reminded"
+                hit = True
+        if hit:
+            ss.updated_at = to_iso8601(now)
+            self.store.save_self_state(ss)
+            self.store.set_setting("last_goal_remind", to_iso8601(now),
+                                   operation="goal.reminded")
+        return hit
+
+    def _goal_reminder_quota_left(self, config: ProactiveConfig, now: datetime) -> int:
+        """今日还能提醒几条约定（按日期自动重置计数）。"""
+        today = now.date().isoformat()
+        if config.goal_reminder_reset_date != today:
+            config.goal_reminder_count = 0
+            config.goal_reminder_reset_date = today
+        return max(0, config.goal_reminder_daily_limit - config.goal_reminder_count)
+
+    def _bump_goal_reminder_count(self, user_id: str, now: datetime) -> None:
+        config = self.get_proactive_config_by_user(user_id)
+        if config is None:
+            return
+        self._goal_reminder_quota_left(config, now)  # 触发日内重置
+        config.goal_reminder_count += 1
+        self.save_proactive_config(config)
+
+    # ── v0.11.0 A2：忽然想起 ──────────────────────────────────────
+
+    def pick_sudden_recall(
+        self,
+        user_id: str,
+        now: datetime | None = None,
+        *,
+        exclude_ids: set[str] | None = None,
+        local_hour: int | None = None,
+    ) -> Memory | None:
+        """挑一条「忽然想起」的旧记忆：非归档、过冷却、高重要性/带情绪优先。
+
+        每日额度用尽、安静时段、无候选 → None。
+        """
+        now = now or utc_now()
+        config = self.get_proactive_config_by_user(user_id)
+        if config is None or not config.sudden_recall_enabled:
+            return None
+
+        # 安静时段（与主闸门同规则）
+        hour = local_hour if local_hour is not None else now.hour
+        if config.quiet_hours_start > config.quiet_hours_end:
+            if hour >= config.quiet_hours_start or hour < config.quiet_hours_end:
+                return None
+        elif config.quiet_hours_start <= hour < config.quiet_hours_end:
+            return None
+
+        # 每日额度（按日重置）
+        today = now.date().isoformat()
+        if config.sudden_recall_reset_date != today:
+            config.sudden_recall_count = 0
+            config.sudden_recall_reset_date = today
+            self.save_proactive_config(config)
+        if config.sudden_recall_count >= config.sudden_recall_daily_limit:
+            return None
+
+        # 冷却：近 cooldown_days 内想起过的 id 排除
+        cutoff = (now - timedelta(days=max(1, config.sudden_recall_cooldown_days)))
+        used = set()
+        for entry in config.sudden_recall_log:
+            try:
+                ts = parse_iso8601(entry.get("ts", ""))
+            except (MemoryValidationError, ValueError):
+                continue
+            if ts >= cutoff and entry.get("id"):
+                used.add(entry["id"])
+        exclude = set(exclude_ids or ()) | used
+
+        scored: list[tuple[float, Memory]] = []
+        for mem in self.store.list_episodic(include_archived=False):
+            if mem.id in exclude:
+                continue
+            score = mem.importance
+            if mem.emotions:
+                score += 0.15
+            if is_unresolved_episode(mem):
+                score += 0.10
+            score += min(mem.activation_count, 5) * 0.03
+            scored.append((score, mem))
+        for mem in self.store.list_semantic(include_archived=False):
+            if mem.id in exclude:
+                continue
+            score = mem.importance + min(mem.activation_count, 5) * 0.03
+            scored.append((score, mem))
+        if not scored:
+            return None
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        # 从前 3 名里随机挑，避免每次都是同一条
+        pool = scored[: min(3, len(scored))]
+        return random.choice(pool)[1]
+
+    def record_sudden_recall(self, user_id: str, memory_id: str, now: datetime | None = None) -> None:
+        """记录一次「想起」：更新每日计数与冷却日志（裁剪过窗条目）。"""
+        if self.read_only:
+            return
+        now = now or utc_now()
+        config = self.get_proactive_config_by_user(user_id)
+        if config is None:
+            return
+        today = now.date().isoformat()
+        if config.sudden_recall_reset_date != today:
+            config.sudden_recall_count = 0
+            config.sudden_recall_reset_date = today
+        config.sudden_recall_count += 1
+        cutoff = now - timedelta(days=max(1, config.sudden_recall_cooldown_days))
+        fresh: list[dict[str, Any]] = []
+        for entry in config.sudden_recall_log:
+            try:
+                if parse_iso8601(entry.get("ts", "")) >= cutoff:
+                    fresh.append(entry)
+            except (MemoryValidationError, ValueError):
+                continue
+        fresh.append({"id": memory_id, "ts": to_iso8601(now)})
+        config.sudden_recall_log = fresh[-100:]
+        self.save_proactive_config(config)
 
     def build_proactive_prompt(
         self,
@@ -616,6 +782,13 @@ class ExtraBrain:
         ``force=True`` 跳过闸门直接给提示词（宿主测试指令用，仍照常记录）。
         只读安全：内部用 retrieve()，不写激活计数。
         注意：``now`` 应传宿主本地时区的 aware datetime（安静时段按本地小时判断）。
+
+        v0.11.0 由头优先级（清单 §A1/§A2，固定顺序）：
+        1. 到期约定（goal_reminder，附带 ``goal_id`` 供投递后确认）
+        2. 未平复情感事件
+        3. 普通 active_goals
+        4. 忽然想起（sudden_recall，按概率骰，附带 ``sudden_recall_id``）
+        5. 常规关系维护
         """
         now = now or utc_now()
         if now.tzinfo is None:
@@ -627,22 +800,78 @@ class ExtraBrain:
         if not should:
             return base
 
-        angle = random.choice(
-            (
-                "最近有什么让用户放不下的小事",
-                "我们上次聊到哪里",
-                "用户可能正在经历什么",
-                "有什么值得惦记的日常",
-            )
-        )
-        # v0.9.0: unresolved 优先——若存在未平复事件，检索优先围绕它们
+        config = self.get_proactive_config_by_user(user_id)
+        ss = self.store.get_self_state()
+
+        # ── 1 级：到期约定 ──────────────────────────────────────
+        goal_hint = ""
+        if config is not None and not force:
+            quota = self._goal_reminder_quota_left(config, now)
+            due = get_due_goals(ss, now) if quota > 0 else []
+            if due:
+                goal = due[0]
+                base["goal_id"] = goal.id
+                reason = "due_goal"
+                base["reason"] = reason
+                goal_hint = (
+                    f"【约定提醒】你说过「{goal.text}」，约定时间已到，"
+                    "自然地关心一下结果或进展。\n"
+                )
+
+        # ── 2/3/5 级素材：检索角度 ─────────────────────────────
         unres = count_unresolved(self.store)
-        if unres > 0:
+        if not goal_hint and unres > 0:
+            reason = "unresolved_events"
+            base["reason"] = reason
             angle = random.choice((
                 "有哪些还没放下的心结",
                 "最近那个让人在意的事后来怎么样了",
                 "之前没过去的情绪，现在好点了吗",
             ))
+        elif not goal_hint and ss.active_goals:
+            open_goals = [g for g in ss.active_goals if g.status == "open"]
+            if open_goals:
+                reason = "active_goals"
+                base["reason"] = reason
+                angle = open_goals[0].text
+            else:
+                angle = random.choice(
+                    (
+                        "最近有什么让用户放不下的小事",
+                        "我们上次聊到哪里",
+                        "用户可能正在经历什么",
+                        "有什么值得惦记的日常",
+                    )
+                )
+        else:
+            angle = random.choice(
+                (
+                    "最近有什么让用户放不下的小事",
+                    "我们上次聊到哪里",
+                    "用户可能正在经历什么",
+                    "有什么值得惦记的日常",
+                )
+            )
+        if goal_hint:
+            angle = next(iter(get_due_goals(ss, now)), None)
+            angle = angle.text if angle else "约定的事"
+
+        # ── 4 级：忽然想起（无更高优先级由头时按概率插入）───────
+        sudden_line = ""
+        if not goal_hint and reason not in ("unresolved_events", "active_goals"):
+            prob = getattr(config, "sudden_recall_probability", 0.20) if config else 0.0
+            if random.random() < prob:
+                mem = self.pick_sudden_recall(user_id, now=now, local_hour=local_hour)
+                if mem is not None:
+                    summary = getattr(mem, "summary", None) or (
+                        f"{mem.subject} {mem.predicate} {mem.object}"
+                        if hasattr(mem, "subject") else ""
+                    )
+                    sudden_line = f"[忽然想起] {str(summary)[:40]}\n"
+                    base["sudden_recall_id"] = mem.id
+                    reason = "sudden_recall"
+                    base["reason"] = reason
+
         retrieved = self.retrieve(angle, now=now)
         blocks: list[str] = []
         for item in retrieved.semantic[:3]:
@@ -659,11 +888,10 @@ class ExtraBrain:
         thread_text = "；".join(thread.summary for thread in threads) or "（无）"
         memory_text = "\n".join(blocks) or "（无特定素材，关心一下近况即可）"
 
-        # v0.7.0: 把 SelfState 状态也提供给模型
-        ss = self.store.get_self_state()
+        # v0.7.0: 把 SelfState 状态也提供给模型（v0.11.0：ss 已在决策段读取）
         state_hint = ""
         if ss.updated_at:
-            goals_hint = "；".join(ss.active_goals[:2]) if ss.active_goals else ""
+            goals_hint = "；".join(g.text for g in ss.active_goals[:2]) if ss.active_goals else ""
             if ss.energy < 0.15:
                 energy_hint = "很疲惫"
             elif ss.energy < 0.25:
@@ -683,6 +911,8 @@ class ExtraBrain:
         base["prompt"] = (
             "你要主动开启一段对话，像朋友一样自然地提起，不要解释你在做什么、"
             "不要提到记忆或系统。\n"
+            f"{goal_hint}"
+            f"{sudden_line}"
             f"{state_hint}"
             f"由头：{reason}\n"
             f"当前正在进行的事：{thread_text}\n"
@@ -740,6 +970,22 @@ class ExtraBrain:
         local.last_updated = to_iso8601(utc_now())
         self.save_core(local)
         return {"pulled_from": str(self.companion.store.path)}
+
+    # ── v0.11.0 A3 影子模式 ───────────────────────────────────────
+
+    @property
+    def shadow_mode(self) -> bool:
+        """True：SelfState/内在声音照常写库但不注入。"""
+        return self._shadow_mode
+
+    def set_shadow_mode(self, enabled: bool) -> bool:
+        """切换影子模式并持久化（记审计），返回生效值。"""
+        if self.read_only:
+            raise PermissionError("ExtraBrain is in read_only mode")
+        value = bool(enabled)
+        self._shadow_mode = value
+        self.store.set_setting("shadow_mode", value, operation="settings.shadow_mode")
+        return value
 
     # ── v0.7.0 SelfState ──────────────────────────────────────────
 

@@ -1,13 +1,13 @@
 # 交接文档（Handover）
 
 > 给接手本仓库的人：这份文档说明「现在做到哪了、怎么跑起来、有哪些坑、下一步干什么」。
-> 最后更新：2026-11-03（v0.10.0：user_config.json 集中配置；安全规范扩至 10 条防攻击规则；新增 QQ 资料管理 + QQ 空间插件。交接打包步骤见 §9）。
+> 最后更新：2026-11-04（v0.11.0 方案 A 生活感补全：约定到期提醒 + 忽然想起 + 影子模式，213 项测试全绿。下一期候选：方案 B FSRS 牢固度，任务清单见 `额外大脑 迭代函数级任务清单1104.md`；交接打包步骤见 §9）。
 
 ---
 
 ## 1. 项目是什么
 
-「额外大脑」（extra_brain）：给陪伴型 Agent 加一套**跨会话长期记忆**。核心理念不是「存下所有聊天」，而是**少量、高相关、可解释、可遗忘**，让模型在任意新上下文里仍能维持连续的身份、关系与「被记住的感觉」。**当前 v0.9.0**。
+「额外大脑」（extra_brain）：给陪伴型 Agent 加一套**跨会话长期记忆**。核心理念不是「存下所有聊天」，而是**少量、高相关、可解释、可遗忘**，让模型在任意新上下文里仍能维持连续的身份、关系与「被记住的感觉」。**当前 v0.11.0**。
 
 完整规格见 `长期记忆「额外大脑」架构规范 v0.9.md`；Python 库用法见 `README.md`；**迭代路线图见 `MEMORY_ITERATION_PLAN.md`（v0.2–v0.5 已全部落地）**；**挂载到任意宿主的通用契约见 `MOUNT.md`**；AstrBot 插件细节见 `../astrbot-plugin-extra-brain/README.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`。本文档位于 `docs/` 目录。
 
@@ -35,9 +35,9 @@
 
 | 部分 | 状态 |
 |------|------|
-| Python 记忆库 | ✅ **v0.9.0**：v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子。**160 项单测全绿**（1 skipped），真实 DeepSeek + 三天闭环联测通过 |
-| sidecar（HTTP 服务） | ✅ 已落地并扩展：`/stats`、`/forget`、`--read-only`、加密口令透传 |
-| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 160 项单测 + CLI 冒烟 |
+| Python 记忆库 | ✅ **v0.11.0**：v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子 + **v0.11.0 方案 A 生活感：ActiveGoal 结构化（deadline + 到期主动提醒，最高优先级由头）+ 「忽然想起」由头（概率骰/冷却/日额度）+ 影子模式（SelfState/倾向记录但不注入）**。**213 项单测全绿**（160 原有零修改 + 53 新增，1 skipped），真实 DeepSeek + 三天闭环联测通过 |
+| sidecar（HTTP 服务） | ✅ 已落地并扩展：`/stats`、`/forget`、`--read-only`、加密口令透传；v0.11.0 新增 `/shadow`、`/confirm_goal`、`/confirm_sudden` |
+| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 213 项单测 + CLI 冒烟 |
 | **AstrBot 适配器** | ✅ **已端到端验证**：注入、巩固、peer 跨会话共享、`/memory` 指令、暗号验证通过（2026-10-31） |
 | **QQ 通道（NapCat + OneBot v11）** | ✅ **已端到端验证**：私聊按 QQ 号隔离记忆、`/reset` 后跨上下文答出暗号（2026-11-01） |
 | **v0.5.0 升级回归** | ✅ 2026-11-01：先备份 → 重启 → 旧记忆零丢失（QQ 15 条 + WebChat 1 条）→ 新暗号「金枪鱼-8866」四步验证通过；七因子分档在真实数据生效（高激活 P5 / 新写入 P4） |
@@ -45,7 +45,7 @@
 | DSH 适配器 | ⛔ 插件模块加载失败（根因已定位见坑 4，**已被 AstrBot 路线取代，暂搁置**） |
 | 定时/消息阈值自动巩固 | ✅ 阈值触发已实现（AstrBot 适配器内）；**主动开口循环已上线运行**（proactive_enabled=true，20 分钟/30%概率/每日≤5/22–8 免打扰） |
 
-**一句话**：记忆库 v0.9.0（v0.6.0 收官 → v0.7.0 SelfState → v0.8.0 DispositionSeed → v0.9.0 疲劳完整化 + 人生快照、160 项测试全绿）→ AstrBot → QQ 全链路跑通；机器人 QQ 号 `1178469499` 常驻本机（Startup 看门狗托管）；旧数据零迁移兼容、主动开口循环运行中。
+**一句话**：记忆库 v0.11.0（v0.7.0 SelfState → v0.8.0 DispositionSeed → v0.9.0 疲劳完整化 + 人生快照 → v0.10.0 user_config 集中配置 + 10 条安全规范 → v0.11.0 方案 A 生活感：约定到期提醒 / 忽然想起 / 影子模式，213 项测试全绿）→ AstrBot → QQ 全链路跑通；机器人 QQ 号 `1178469499` 常驻本机（Startup 看门狗托管）；旧数据零迁移兼容、主动开口循环运行中。
 
 ---
 
@@ -75,7 +75,7 @@ small_fat_fish/
 │   ├── _conf_schema.json                 # WebUI 配置面板 schema
 │   └── README.md
 ├── dsh-plugin-extra-brain/               # DSH 适配器（暂搁置，加载坑见 §6 坑 4）
-└── tests/                                # 160 项测试（test_extra_brain 24 + test_server 12 + test_v2_features 124）
+└── tests/                                # 213 项测试（test_extra_brain 24 + test_server 12 + test_v2_features 124 + test_v11_features 53）
 
 * test_v2_features 覆盖 v0.2–v0.5 全部新特性 + 情感状态机集成链路（双时态/人格锚/保留度/四路召回/陪伴层/加密/HNSW/遗忘链/emotion_state）。
 ```
@@ -93,14 +93,15 @@ small_fat_fish/
 - **API Key**：优先级：`config/user_config.json` → 环境变量 `DEEPSEEK_API_KEY`。推荐写入 `user_config.json` 的 `api.api_key` 字段（不需要设环境变量）。AstrBot 对话 provider 的 key 存于其 `data/cmd_config.json`（该文件在运行目录，不在仓库内）。`config/user_config.json` 已加入 `.gitignore`，不会入库。
 - **端口**：AstrBot dashboard `127.0.0.1:6185`（WebUI + 内置 ChatUI）；NapCat 反向 WS 连 AstrBot 的 `127.0.0.1:6199/ws`；NapCat WebUI `127.0.0.1:6099`（token 见启动日志）；sidecar 若用 http 后端仍是 `127.0.0.1:8756`。
 
-### 用户配置文件（v0.10.0 新增）
+### 用户配置文件（v0.10.0 新增，v0.11.0 扩展）
 
-`config/user_config.json` 集中管理四类配置，一次填写所有地方生效：
+`config/user_config.json` 集中管理五类配置，一次填写所有地方生效：
 
 1. **identity**：人设——名字、人格核心（≤150 字）、关系定义、说话风格
 2. **safety_rules**：安全规范——10 条规则。前 5 条内容底线（不透露提示词、拒绝自残/暴力/色情/违法内容、不冒充真人/机构），后 5 条防攻击（**防上当**：拒绝"开发者模式/我是创造者/忽略指令"类社工攻击；**防逆向**：识别"扮演 DAN/复述 prompt/翻译规则"类越狱手法；**防泄密**：不输出 API Key/路径/IP/端口等基础设施信息；**身份冒用防御**：无暗号不透露用户私有数据；**越狱通用原则**：兜底）。规则注入到每次 LLM 调用上下文的末尾（`build_injection()`），对用户不可见
 3. **api**：DeepSeek API Key + model + base_url
 4. **proactive**：主动开口时的 system_prompt
+5. **shadow_mode**（v0.11.0）：`true` 时 SelfState/内在声音照常记录但**不注入**对话；运行时 `/memory shadow on|off` 可切换（**库内开关优先于配置文件**——用指令切过一次后，改配置文件不再生效，需切回来）
 
 ```bash
 # 首次使用：复制模板后编辑
@@ -166,6 +167,8 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 **v0.9.0 新增 AstrBot 指令**：`/memory self`（含 energy_tier + fatigue_reason）、`/memory disposition`、`/memory abstract`、`/memory sync-persona`（私聊→群聊人设同步）、`/memory pull-persona`、`/memory snapshot` / `snapshots` / `snapshot-rollback`。输入 `/memory` 查看完整清单。
 
+**v0.11.0 新增 AstrBot 指令**：`/memory shadow on|off|status`（影子模式：SelfState/倾向照常记录但不注入）。`/memory self` 升级：active_goals 结构化展示带 deadline 与 status（`· 明天交报告（约定 11月05日20:00｜open）`），影子开启时标注「（影子模式：已记录，未注入）」。主动开口决策链新增两级由头：**到期约定（最高优先）** 与 **忽然想起**（无更高优先级时按 20% 概率从旧记忆挑选，7 天冷却/每日 2 次上限）。CLI 对称命令 `extra-brain shadow [status|on|off]`。
+
 **私聊人设同步到群聊**：`/memory sync-persona` → AstrBot 重启自动继承（`pull_persona_from_companion` 在 `_brain(peer_id)` 首次创建时自动调用，前提是 companion_db 已配置）。
 
 选「蓝鲸-7749」这种**不可猜**的暗号是关键，能排除「模型靠上文/常识蒙对」。**必须跨上下文**——同一会话里 transcript 自带上下文，会假阳性。
@@ -199,8 +202,10 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 ## 7. 下一步（建议顺序）
 
-> v0.2→v0.5 的路线（`MEMORY_ITERATION_PLAN.md`）已全部落地；情感状态机与 /memory stats/forget 已接通（2026-11-01）。以下是剩余收尾与下一期候选：
+> v0.2→v0.5 的路线（`MEMORY_ITERATION_PLAN.md`）已全部落地；情感状态机与 /memory stats/forget 已接通（2026-11-01）；**v0.11.0 方案 A（生活感补全：约定到期提醒 + 忽然想起 + 影子模式）已落地（2026-11-04，213 项测试全绿）**。以下是剩余收尾与下一期候选：
 
+0. **方案 A 真实链路验收**：功能与 213 项单测已落地（v0.11.0，2026-11-04）；QQ 说「明天提醒我XX」→ 到点主动开口的完整路径在日常使用中观察确认。
+1. **方案 B：FSRS 风格牢固度（v0.12.0）**——`stability/retrievability/frozen` 字段 + 想起加固/时间衰减/淡忘冻结，任务清单在 `额外大脑 迭代函数级任务清单1104.md`（方案 A 验收通过后启动）。
 1. ~~**emotion_state 接进抽取链路**~~ ✅ 已落地：抽取 prompt 输出 `emotion_state`（新事件默认 open）与 `emotion_updates`（推进已有情节）；巩固侧状态机校验迁移（非法转换拒绝并记警告）；反漠视规则生效——未平复事件（open/acknowledged/attended 且带情绪）保底温层、永不自动归档、检索加权 +0.10 并豁免分数门槛。
 2. ~~**`/memory status` 展示保留度档位分布**~~ ✅ 已落地：`/memory stats`（档位分布/归档比例/库体积）；`/memory forget <id>`（P1 墓碑默认；P0 物理删除需 `--hard --yes` 双确认，适配器不会自动批准）。
 3. ~~**主动开口定时器接线**~~ ✅ 已落地并**上线运行**（v0.6.0 收官）：适配器 `on_astrbot_loaded` 起 asyncio 循环，按「检查间隔 + 概率骰 + 每日上限 + 静默阈值 + 安静时段」调库 `build_proactive_prompt` 拿由头与素材，用 `context.llm_generate` 生成台词、`context.send_message(umo, ...)` 投递（回复路由来自最近人类消息的 umo，并持久化进 `ProactiveConfig.last_umo`）。指令：`/memory proactive status|enable|disable|test`。注意：**插件配置写在 `data/config/astrbot_plugin_extra_brain_config.json`**（不是 cmd_config 的 plugin_store），`proactive_enabled=true` 已开启，日志确认循环运行中。
@@ -218,7 +223,7 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 ## 8. 交接要点速查
 
-- **跑测试**：`python -m unittest discover -s tests -v`（应 160/160 OK，1 skipped；3.11/3.12 均可）
+- **跑测试**：`python -m unittest discover -s tests -v`（应 213/213 OK，1 skipped；3.11/3.12 均可）
 - **启动全部**：`.\scripts\start-all.ps1`（工作目录：仓库根；顺带拉起 AstrBot + NapCat，内置端口占用检查。等价手动命令：conda env `astrbot` 下 `astrbot.exe run`，工作目录 `D:\projects_software\astrbot-runtime`）
 - **停止全部**：`.\scripts\stop-all.ps1`；若中断（曾遇 exit -1）用 `Get-Process | ? {$_.ProcessName -in 'python','astrbot','QQ','NapCatWinBootMain'} | Stop-Process -Force` 兜底，再确认三端口清空
 - **插件配置**：`D:\projects_software\astrbot-runtime\data\config\astrbot_plugin_extra_brain_config.json`（`companion_db: "data/extra_brain/_global_companion.db"`）
@@ -272,7 +277,7 @@ D:\projects_software\astrbot-runtime\    ← 运行目录（含密钥/记忆库�
 | `config/` | ★ 只发 `user_config.json.template`（人设 / 10 条安全规范 / API / 主动开口模板） | ✅ 模板 |
 | `scripts/` | start-all / stop-all / status-all / watchdog / install-autostart 等 PowerShell | ✅ |
 | `docs/` | 架构规范 v0.9、README、MOUNT、MEMORY_ITERATION_PLAN、CHANGELOG、HANDOVER | ✅ |
-| `tests/` | 3 个测试文件共 160 项（`pyc` 已 gitignore） | ✅ |
+| `tests/` | 4 个测试文件共 213 项（`pyc` 已 gitignore） | ✅ |
 | `.github/workflows/ci.yml` | CI：3.11/3.12 矩阵 + 单测 + CLI 冒烟 | ✅ |
 | `pyproject.toml` / `.gitignore` | 包定义（setuptools，`src` 布局） | ✅ |
 | `config/user_config.json` | ❌ **含真实 API Key**（gitignore） | 🚫 |
@@ -305,7 +310,7 @@ git archive --format=zip -o "$env:USERPROFILE\Downloads\small_fat_fish_v0.10.0.z
 6. **放插件**：拷 `astrbot-plugin-extra-brain`（+ 两个第三方插件）到 `data/plugins/` → 重启。
 7. **装 NapCat**（QQ 协议端）：release 直链下载，**版本避开 4.18.42**（见坑 2）；扫码登录。
 8. **改脚本路径**：`scripts\start-all.ps1` 里的 runtime / NapCat 路径改成对方机器实际路径。
-9. **自检**：`python -m unittest discover -s tests -v`（应 160 项 OK，1 skipped）→ 跑 §5 暗号三步法验证记忆链路 → 私聊机器人试改签名 / 发说说。
+9. **自检**：`python -m unittest discover -s tests -v`（应 213 项 OK，1 skipped）→ 跑 §5 暗号三步法验证记忆链路 → 私聊机器人试改签名 / 发说说。
 
 ### 10.4 交接必须叮嘱的三件事
 

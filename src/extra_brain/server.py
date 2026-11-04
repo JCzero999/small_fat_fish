@@ -157,7 +157,37 @@ class ExtraBrainServer:
         if method == "POST" and route == "/snapshot-rollback":
             return self._snapshot_rollback(body)
 
+        if method == "GET" and route == "/shadow":
+            return {"shadow_mode": self._brain(_peer(query)).shadow_mode}
+
+        if method == "POST" and route == "/shadow":
+            brain = self._brain(_peer(body))
+            enabled = bool(body.get("enabled", False))
+            return {"shadow_mode": brain.set_shadow_mode(enabled)}
+
+        if method == "POST" and route == "/confirm_goal":
+            now = _now_of(body)
+            marked = self._brain(_peer(body)).confirm_goal_reminder(
+                _peer(body), _string(body.get("goal_id"), "goal_id"), now=now
+            )
+            return {"marked": marked}
+
+        if method == "POST" and route == "/confirm_sudden":
+            now = _now_of(body)
+            self._brain(_peer(body)).confirm_sudden_recall(
+                _peer(body), _string(body.get("memory_id"), "memory_id"), now=now
+            )
+            return {"recorded": True}
+
         raise _HttpError(HTTPStatus.NOT_FOUND, f"unknown route {method} {route}")
+
+    def _now_of(self, body: Mapping[str, Any]):
+        raw = body.get("now")
+        if not raw:
+            return None
+        from .models import parse_iso8601
+
+        return parse_iso8601(str(raw))
 
     def _inject(self, body: Mapping[str, Any]) -> dict[str, Any]:
         peer_id = _peer(body)

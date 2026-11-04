@@ -4,6 +4,39 @@
 
 ---
 
+## 2026-11-04 — v0.11.0 方案 A：生活感补全（约定提醒 + 忽然想起 + 影子模式） ✅
+
+### A1 active_goals 结构化 + 到期主动提醒 ✅
+- ✅ 新增 `goals.py`：`ActiveGoal`（text/deadline/created_at/source_memory_id/status/id，status ∈ open|reminded|done|expired）；`SelfState.active_goals` 由 `list[str]` 升级为 `list[ActiveGoal]`
+- ✅ 旧库零迁移兼容：`list[str]` 加载自动转 `ActiveGoal(text=…)`；无 deadline 的 open 目标序列化回纯字符串（`to_dict(compact=True)`）；`ActiveGoal.__eq__/__str__` 与字符串互通，旧断言零修改通过
+- ✅ `parse_deadline_from_text`：中文相对时间解析（今晚21点/明早9点/明天/后天/大后天/周X/下周X/X月X日/N天后/N小时后），解析不到返回 None 不抛异常；约定默认时刻 20:00
+- ✅ `extract_goals_from_report` 合并去重（difflib≥0.75 视为同一条）、旧目标补 deadline、上限 5（deadline 临近优先）；`update_goal_statuses` reminded 超 3 天→expired
+- ✅ 主动开口优先级链固定：到期约定 > 未平复事件 > 普通目标 > 忽然想起 > 常规维护；`build_proactive_prompt` 返回附带 `goal_id`，投递成功 `confirm_goal_reminder` → status=reminded + 每日提醒额度（默认 1/peer/日）
+
+### A2 「忽然想起」 ✅
+- ✅ `ProactiveConfig` 新增 7 字段：`sudden_recall_enabled/daily_limit(2)/cooldown_days(7)/probability(0.20)/count/reset_date/log`（JSON 列存储，旧配置加载即默认值）
+- ✅ `pick_sudden_recall`：非归档、冷却期外、过安静时段、日额度内；按 importance+情绪+未平复+激活数打分，前 3 随机；`record_sudden_recall` 更新冷却与计数
+- ✅ 决策链第 4 级：无更高优先级由头时按概率骰插入 `[忽然想起] …` 标签行；`confirm_sudden_recall` 投递确认
+
+### A3 影子模式 ✅
+- ✅ `ExtraBrain(shadow_mode=…)` + `brain_settings` 表（新增键值表，含审计）；库里存过开关则以库为准，默认 False＝与 v0.10 行为完全一致（清单建议默认 True，实现选 False 保兼容——验收标准是"关闭时行为不变"，开/关均可一键切换）
+- ✅ 影子开启：`update_self_state`/Disposition 照常写库；`build_injection` 跳过【这一刻的自己】与【内在声音】；Core/语义/情节/安全规范照常注入
+- ✅ 指令：`/memory shadow on|off|status`（AstrBot）、CLI `extra-brain shadow [status|on|off]`、sidecar `GET|POST /shadow`；`/memory self` 影子下标注「（影子模式：已记录，未注入）」
+- ✅ `user_config.json` 新增 `shadow_mode` 字段（模板与实际文件同步，runtime 已拷贝）
+
+### 展示与投递 ✅
+- ✅ `/memory self` 与注入段落带 deadline/status（`· 明天交报告（约定 11月05日20:00｜open）`）
+- ✅ 适配器 `_proactive_tick` 发送成功后按 `decision.goal_id / sudden_recall_id` 回执确认；`/memory` 帮助清单更新为 17 指令
+
+### 测试 ✅
+- ✅ 新增 `tests/test_v11_features.py` 53 项：deadline 解析 12 例、模型兼容 10 例、合并/状态机/到期 8 例、优先级链 8 例、忽然想起行为 7 例、影子模式 6 例、ProactiveConfig 兼容 3 例
+- ✅ 全量 **213 项测试全绿**（160 原有零修改 + 53 新增，1 skipped）；CLI shadow 冒烟通过；editable 安装确认 0.11.0
+
+### 版本与文档 ✅
+- ✅ 版本号统一 `0.11.0`（pyproject / `__version__` / metadata desc 更新为 17 指令）；CHANGELOG / README / HANDOVER 同步
+
+---
+
 ## 2026-11-03 — v0.10.0：user_config 集中配置 + 10 条安全规范 + QQ 资料/空间插件 ✅
 
 ### user_config.json 集中管理 ✅

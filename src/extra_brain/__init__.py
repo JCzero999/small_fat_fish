@@ -38,6 +38,8 @@ from .models import (
     MemoryValidationError,
     NarrativeLayer,
     ProactiveConfig,
+    ActiveGoal,
+    normalize_goal,
     RelationshipModel,
     SelfState,
     SemanticMemory,
@@ -53,6 +55,7 @@ from .session import SessionTracker
 from .storage import MemoryStore, WriteBatch
 
 __all__ = [
+    "ActiveGoal",
     "ActiveThread",
     "ConflictDetection",
     "ConsolidationReport",
@@ -105,6 +108,7 @@ __all__ = [
     "derive_view",
     "is_emotion_protected",
     "is_unresolved_episode",
+    "normalize_goal",
 ]
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
