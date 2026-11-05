@@ -1,6 +1,6 @@
 # Extra Brain（额外大脑）
 
-依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.12.0**（方案 A 生活感补全 + 方案 B FSRS 风格牢固度），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
+依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.12.1**（方案 A 生活感补全 + 方案 B FSRS 风格牢固度 + 表达与人设层：persona 正文注入 / 诚实契约 / 群聊规矩），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
 
 > **文档索引**：设计规范见 `长期记忆「额外大脑」架构规范 v0.9.md`（第 10 节为实现对照）；DSH 宿主接入与跨会话验证见 `HANDOVER.md`；变更记录见 `CHANGELOG.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`；**AstrBot 挂载（当前主力）见 `../astrbot-plugin-extra-brain/README.md`；挂载到任意宿主的通用契约见 `MOUNT.md`；迭代路线图见 `MEMORY_ITERATION_PLAN.md`**。本文档位于 `docs/` 目录。
 
@@ -698,6 +698,32 @@ v0.3.0 起支持**四路召回** `search_four_paths(path=...)`：`A` 语义相�
 - **保护项永不冻结**：`protected` / Core 引用 / 未平复情感事件 / 有效约定的关联记忆。
 - **可观测**：`/memory stats` 牢度分布与冻结数；`/memory list` 每条带牢度；`/memory freeze <id>` / `/memory unfreeze <id>` 手动控制（解冻重置 1.0）；CLI `extra-brain decay` / `freeze <id> --unfreeze`。
 - **一键关闭**：`SolidityConfig(enabled=False)` 回到 v0.11 行为。
+
+## 表达与人设层（v0.12.1）
+
+不动记忆内核的「像群友 / 像小豚」体验层，方案详见 `docs/小豚「表达与人设层」迭代方案V0.12.1.md`。
+
+### 人设正文（persona_file）
+- `persona/xiaotun_v1.md` 是权威源（800–1500 字，8 段结构：你是谁/关系/说话/记忆事实/工具承诺/群聊/主动关心/安全引用）。
+- 配置方式：`user_config.json` 设 `"persona_file": "persona/xiaotun_v1.md"`。适配器每轮把它追加到 system prompt（幂等），主动开口台词同样带上。文件缺失自动回退 `identity` 旧路径，不崩溃。
+- **修改人设**：直接编辑该 md（文末 `<!-- -->` 注释区不会注入）；runtime 侧需要把文件拷到运行目录同名相对路径（或写绝对路径）。
+- 回滚：清空 `persona_file` 即回到纯 identity 人格，无需动记忆库。
+- 字数硬上限 3000（超出截断）；上线实测：人设 ~1079 tokens + 注入 ≤1800，在预算内。
+
+### 诚实契约行（honesty_footer）
+- `"honesty_footer": true` 时注入首部加一行：`【契约】下列为已检索记忆；未出现的经历不要当作共同回忆；工具结果以本轮返回为准。`（引擎默认关=输出零变化）
+- 与人设【记忆与事实】【工具与承诺】配合生效：没检索到就说不知道，工具没成功返回不说「已做」。
+
+### 群聊模式（group_reply_mode）
+- `"group_reply_mode": "relevant_only"`（默认）：群消息照常进模型，由人设约束「相关才回、短回、不泄私聊」。可选 `mention_only`（仅 @/回复才处理）/ `off`（完全不处理群消息）。
+- 本版本仅配置声明 + 人设落地；适配器强制过滤行为留待观察后按需开启（现网稳定优先）。
+- 隔离保证（已回归测试）：群按群号、私聊按 QQ 号分库，私聊记忆绝不注入群 session。
+
+### 表情规范
+- 文案级：一轮最多一个表情、可以不用、禁止口癖化（写在人设【怎么说话】）。meme 资源包与 `astrbot_plugin_meme_manager` 联动为可选项，未阻塞。
+
+### 签名 / 空间引导词
+- `prompts/signature_guide.md`、`prompts/qzone_guide.md` 为文案权威源，已同步进 qqprofile_ex / qzone 插件配置（改后需重启 AstrBot）。核心规矩：签名≤20字便签体、说说情绪真起来才发且日限 1 条、失败不假装已发、不泄露私聊细节。
 
 ### 编程配置
 

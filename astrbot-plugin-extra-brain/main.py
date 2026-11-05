@@ -163,6 +163,7 @@ class LocalBackend:
                 companion_db=self._companion_db or None,
                 safety_rules=self._user_config.get("safety_rules"),
                 shadow_mode=bool(self._user_config.get("shadow_mode", False)),
+                honesty_footer=bool(self._user_config.get("honesty_footer", False)),
             )
             # 覆盖 Identity：在创建后写入 Core
             if identity_override:
@@ -465,6 +466,12 @@ class ExtraBrainPlugin(star.Star):
 
         # v0.10.0: 加载 user_config.json（人设 / 安全规范 / API Key / 主动开口提示词）
         self._user_config = self._load_user_config()
+        # v0.12.1 T1: 人设正文（persona_file 指向的 md；缺省空=沿用 identity 旧路径）
+        self._persona_text = self._load_persona(self._user_config)
+        # v0.12.1 T4: 诚实契约行开关（engine 侧同名参数）
+        self._honesty_footer = bool(self._user_config.get("honesty_footer", False))
+        if self._persona_text:
+            logger.info(f"extra-brain: persona 正文已加载（{len(self._persona_text)} 字）")
 
         backend_mode = str(self.config.get("backend", "local"))
         try:
@@ -491,21 +498,77 @@ class ExtraBrainPlugin(star.Star):
             event.unified_msg_origin, str(self.config.get("peer_scope", "auto"))
         )
 
-    @staticmethod
-    def _load_user_config() -> dict:
+    _USER_CONFIG_CANDIDATES = (
+        Path("config/user_config.json"),
+        Path("data/config/user_config.json"),
+    )
+    _user_config_dir: Path | None = None
+
+    @classmethod
+    def _load_user_config(cls) -> dict:
         """从 config/user_config.json 加载用户配置（不存在则无害 fallback）。"""
-        candidates = [
-            Path("config/user_config.json"),
-            Path("data/config/user_config.json"),
-        ]
-        for candidate in candidates:
+        for candidate in cls._USER_CONFIG_CANDIDATES:
             if candidate.is_file():
                 try:
-                    with open(candidate, encoding="utf-8") as fh:
+                    cls._user_config_dir = candidate.parent
+                    with open(candidate, encoding="utf-8-sig") as fh:
                         return json.load(fh)
                 except Exception:
                     pass
+        cls._user_config_dir = None
         return {}
+
+    @staticmethod
+    def _resolve_persona_source(raw: str):
+        """解析人设来源：md 文件路径（多 base 查找）或内联文本（persona_text）。"""
+        if not raw:
+            return None
+        path = Path(raw)
+        if path.is_absolute():
+            candidates = [path]
+        else:
+            bases = [Path("."), Path("config"), Path("data/config")]
+            if ExtraBrainPlugin._user_config_dir is not None:
+                bases += [
+                    ExtraBrainPlugin._user_config_dir,
+                    ExtraBrainPlugin._user_config_dir.parent,
+                ]
+            candidates = [base / raw for base in bases]
+        for candidate in candidates:
+            try:
+                if candidate.is_file():
+                    return ("file", candidate)
+            except OSError:
+                continue
+        return ("inline", raw)
+
+    @classmethod
+    def _load_persona(cls, user_config: dict) -> str:
+        """v0.12.1 T1：人设正文。persona_file=md 路径（推荐，含注释剥离与字上限）；
+        persona_text=内联短文本（≤300 字）。都缺省 → 空串，回退 identity 旧路径。"""
+        import re as _re
+        raw = str(user_config.get("persona_file", "") or "").strip()
+        source = cls._resolve_persona_source(raw)
+        if source is None:
+            text = str(user_config.get("persona_text", "") or "").strip()
+            return text[:500] if text else ""
+        kind, value = source
+        if kind == "inline":
+            return str(value)[:500]
+        try:
+            text = value.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+        # 去掉文末 <!-- ... --> 注释区与首个 --- 之前的说明头（不注入）
+        text = _re.sub(r"<!--.*?-->\s*", "", text, flags=_re.S)
+        parts = text.split("\n---\n", 1)
+        if len(parts) == 2 and parts[0].lstrip().startswith("#"):
+            text = parts[1].strip()
+        # 结构约定：正文从【你是谁】起（标题/说明头不注入）
+        anchor = text.find("【你是谁】")
+        if anchor > 0:
+            text = text[anchor:]
+        return text[:3000] if text else ""
 
     @property
     def _consolidate_every(self) -> int:
@@ -600,13 +663,17 @@ class ExtraBrainPlugin(star.Star):
                 continue
             try:
                 provider_id = await self.context.get_current_chat_provider_id(umo)
+                base_prompt = self._user_config.get("proactive", {}).get(
+                    "system_prompt",
+                    "你在主动开启一段对话，像惦记朋友一样自然提起，只输出要发送的那句话本身。",
+                )
+                # v0.12.1 T1：人设正文带上，主动开口的口吻也是小豚的（H4）
+                if self._persona_text:
+                    base_prompt = f"{base_prompt}\n\n{self._persona_text}"
                 resp = await self.context.llm_generate(
                     chat_provider_id=provider_id,
                     prompt=prompt_text,
-                    system_prompt=self._user_config.get("proactive", {}).get(
-                        "system_prompt",
-                        "你在主动开启一段对话，像惦记朋友一样自然提起，只输出要发送的那句话本身。",
-                    ),
+                    system_prompt=base_prompt,
                 )
             except Exception as exc:
                 logger.warning(f"extra-brain: 台词生成失败（peer={peer_id}）：{exc}")
@@ -644,6 +711,17 @@ class ExtraBrainPlugin(star.Star):
 
     # -- hook: 注入 + user 消息捕获 ----------------------------------------
 
+    def _swap_persona(self, system_prompt: str | None) -> str:
+        """人设正文注入：追加到现有 system_prompt 末尾（幂等，已含则跳过）。
+
+        人设 md 首句「你是小豚…」声明优先于面板旧人格；回滚只需清空 persona_file 配置。
+        """
+        current = system_prompt or ""
+        head = self._persona_text[:24]
+        if head and head in current:
+            return current
+        return f"{current}\n\n{self._persona_text}" if current else self._persona_text
+
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
         """每轮 LLM 调用前：捕获 user 文本 + 注入长期记忆（每 event 一次）。"""
@@ -656,6 +734,10 @@ class ExtraBrainPlugin(star.Star):
         # 主动开口依据：记录人类活跃时间与回复路由
         self._last_human_at[peer_id] = datetime.now().astimezone()
         self._last_umo[peer_id] = event.unified_msg_origin
+
+        # v0.12.1 T1：人设正文注入（persona_file 配置时替换人格 prompt；每 event 一次）
+        if self._persona_text:
+            req.system_prompt = self._swap_persona(req.system_prompt)
 
         # 巩固用的 user 消息无条件捕获（不依赖 inject_enabled）
         if prompt:

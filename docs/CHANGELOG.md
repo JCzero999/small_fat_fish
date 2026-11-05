@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-11-05 — v0.12.1 表达与人设层（小豚「像小豚」） ✅
+
+> 按《小豚「表达与人设层」迭代方案V0.12.1.md》执行，插在方案 C 之前；纯体验与配置层，不动记忆内核断言。
+
+### T1 人设正文 v1 ✅
+- ✅ 新增 `persona/xiaotun_v1.md`（约 1100 字，8 段结构：你是谁/关系分层/怎么说话/记忆与事实/工具与承诺/群聊/主动关心与空间/安全引用），写作约束注释区文末不注入
+- ✅ 适配器接入：`user_config.json` 新增 `persona_file`（相对路径多 base 解析：cwd/config/data/config/user_config 同目录及其父；md 自动剥离标题头与注释区，硬上限 3000 字）；`persona_text` 内联短文本兜底；缺省回退旧 `identity` 路径不崩溃
+- ✅ 注入方式：`on_llm_request` 每 event 一次追加到 system_prompt 末尾（幂等防重）；主动开口台词生成也带人设（H4 口吻一致）
+- ✅ token 实测（T1 验收）：人设段 1079 tokens + 默认记忆注入 1728/1800，在预算内；人设正文 1157 字 < 2000 硬上限
+
+### T2 签名/空间引导词人设化 ✅
+- ✅ 新增 repo 权威源 `prompts/signature_guide.md`、`prompts/qzone_guide.md`
+- ✅ runtime 插件配置已替换并验证读回：qqprofile_ex `ai_behavior_guide`（便签式签名≤20字/不泄露私聊/失败不假装）、qzone `post_prompt`（情绪真起来才发/默认每天≤1/不广告不泄隐私）、`comment_prompt`、`reply_prompt`（朋友口吻/不客套/不编共同经历）
+- ✅ 诚实规则写入两份引导词：工具失败绝不在对外文案假装已发
+
+### T3 群聊规则 ✅
+- ✅ 人设段含群聊规矩（相关才回/短回/守口/不代主人答私事）
+- ✅ 新增 `user_config.group_reply_mode`（relevant_only 默认 | mention_only | off）——本迭代仅文档化+配置声明，适配器行为不变（现网稳定优先，验收 H5 人工观察）
+- ✅ 隔离回归测试：`tests/test_v121_features.py` 群/私聊分库互不可见 2 项 + resolve_peer_id 形态 1 项
+
+### T4 记忆–工具诚实契约 ✅
+- ✅ `ExtraBrain(honesty_footer=True)`：注入首部加固定契约行「【契约】下列为已检索记忆；未出现的经历不要当作共同回忆；工具结果以本轮返回为准。」默认 False=输出零变化；user_config 开为 true
+- ✅ 冻结记忆本就不进自动注入（B 行为保持），人设不要求想起已冻结的事
+
+### T5 表情规范 ✅（文案级）
+- ✅ 人设【怎么说话】写入：一轮最多一个表情/可以不用/禁止口癖化刷表情；meme 插件资源包留待后续（接口不阻塞）
+
+### 测试与版本 ✅
+- ✅ 新增 `tests/test_v121_features.py` 5 项（honesty on/off/重开、群隔离、peer 形态）；全量 **254 项绿**（249 原有零修改 + 5 新增，1 skipped）
+- ✅ 版本号 `0.12.1`；persona 同步 runtime；两插件配置人设化生效需重启（本次已重启并 WS 恢复）
+- ⚠️ 发现：真实 peer 库默认注入已达 1728/1800——记忆增长后建议调大 `token_limit` 或精简热记忆，已记入 HANDOVER 风险区
+- **人工验收 H1–H6 待日常对话观察**（详见迭代方案 §3 表）
+
+---
+
 ## 2026-11-04 — v0.12.0 方案 B：FSRS 风格牢固度（想起就牢、久不提就淡） ✅
 
 ### B1 数据模型 ✅

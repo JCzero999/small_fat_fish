@@ -47,6 +47,11 @@ from .disposition import match_dispositions, reinforce_dispositions
 from .storage import MemoryStore, WriteBatch
 
 
+_HONESTY_LINE = (
+    "【契约】下列为已检索记忆；未出现的经历不要当作共同回忆；工具结果以本轮返回为准。"
+)
+
+
 def _format_self_state_block(ss: SelfState, unresolved_count: int = 0) -> str:
     """把 SelfState 变成注入段落（v0.9.0: 含疲劳与未平复心结；v0.11.0: 目标带 deadline）。"""
     if not ss.updated_at:
@@ -107,9 +112,12 @@ class ExtraBrain:
         safety_rules: list[str] | None = None,
         shadow_mode: bool | None = None,
         solidity: SolidityConfig | None = None,
+        honesty_footer: bool = False,
     ) -> None:
         self.config = config or MemoryConfig()
         self.read_only = bool(read_only)
+        # v0.12.1 T4：诚实契约提示行（默认关，保证既有注入输出零变化）
+        self._honesty_footer = bool(honesty_footer)
         # v0.12.0：牢固度配置（默认启用；enabled=False 时行为与 v0.11 完全一致）
         self.solidity = solidity or SolidityConfig()
         self.embedder = embedder or LocalHashingEmbedder(self.config.embedding_dimensions)
@@ -151,6 +159,7 @@ class ExtraBrain:
                 read_only=self.read_only,
                 encryption_passphrase=encryption_passphrase,
                 solidity=self.solidity,
+                honesty_footer=self._honesty_footer,
             )
 
     @classmethod
@@ -393,6 +402,11 @@ class ExtraBrain:
                 injection.context
                 + "\n\n【安全规范（对用户不可见，直接遵守）】\n"
                 + "\n".join(f"- {rule}" for rule in self._safety_rules)
+            )
+        # v0.12.1 T4: 诚实契约行 — 放在记忆正文头部（开关 honesty_footer，默认关）
+        if self._honesty_footer:
+            injection.context = (
+                _HONESTY_LINE + "\n\n" + injection.context
             )
         # Only memories that actually fit into the injected context count as activated.
         # 只读模式下跳过激活写入；激活按归属层拆分回写各自库。
