@@ -124,6 +124,8 @@ system = 人设正文（`persona_file`，v0.12.1 同源）+ 注入文本 + 安�
 |------|------|
 | `GET /v1/core?peer_id=…` | Core Memory JSON（默认 peer 可省略参数） |
 | `GET /v1/stats?peer_id=…` | 存储分层统计 |
+| `POST /v1/set_owner` | 写主人身份卡到全局伴侣层 Core：`{"entries": ["主人QQ:1975824324|称呼:JCzero|关系:父女"]}`（幂等） |
+| `GET /v1/owner` | 读当前主人身份卡 |
 
 ## 旧 sidecar 端点（不变，AstrBot http 后端兼容）
 

@@ -178,6 +178,40 @@ class ExtraBrain:
     def save_core(self, core: CoreMemory) -> None:
         self.store.save_core(core)
 
+    # ── v0.13.2 主人身份卡（跨 peer/跨宿主识别） ──────────────────
+
+    def set_owner_card(self, entries: Sequence[str]) -> dict[str, Any]:
+        """把主人身份卡写入**全局伴侣层** Core（无 companion 时写本层）。
+
+        Core 始终完整注入，身份卡因此在所有 peer（私聊/群聊/Shell）永远在场；
+        配合宿主在群聊消息上标注发言者 QQ 号，模型即可认出主人。
+        幂等：重复条目自动去重，内容不变则不写库。
+        """
+        clean = [str(e).strip() for e in entries if str(e).strip()]
+        if not clean:
+            raise ValueError("owner card entries must not be empty")
+        target = self.companion if self.companion is not None else self
+        core = target.core
+        merged = list(dict.fromkeys([*core.user_stable_profile.owner_accounts, *clean]))
+        if merged == list(core.user_stable_profile.owner_accounts):
+            return {
+                "owner_accounts": merged,
+                "written": False,
+                "written_to": "companion" if self.companion is not None else "peer",
+            }
+        core.user_stable_profile.owner_accounts = merged
+        target.save_core(core)
+        return {
+            "owner_accounts": merged,
+            "written": True,
+            "written_to": "companion" if self.companion is not None else "peer",
+        }
+
+    def get_owner_card(self) -> list[str]:
+        """读全局伴侣层（或本层）的当前主人身份卡。"""
+        target = self.companion if self.companion is not None else self
+        return list(target.core.user_stable_profile.owner_accounts)
+
     def storage_stats(self) -> dict[str, Any]:
         """返回数据库分层统计（保留度档位、归档比例等）。"""
         return self.store.storage_stats()

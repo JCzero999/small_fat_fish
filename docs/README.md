@@ -786,6 +786,10 @@ v0.3.0 起支持**四路召回** `search_four_paths(path=...)`：`A` 语义相�
 ### 签名 / 空间引导词
 - `prompts/signature_guide.md`、`prompts/qzone_guide.md` 为文案权威源，已同步进 qqprofile_ex / qzone 插件配置（改后需重启 AstrBot）。核心规矩：签名≤20字便签体、说说情绪真起来才发且日限 1 条、失败不假装已发、不泄露私聊细节。
 
+### 主人身份卡（v0.13.2 跨端识别）
+
+`user_config.json` 的 `identity.owner_accounts` 配置主人身份（如 `"主人QQ:1975824324|称呼:JCzero|关系:父女"`），插件启动后自动写入**全局伴侣层 Core**——Core 始终完整注入，因此私聊、群聊、Web Shell 全部在场。群聊消息会被自动标注 `[发言者 <QQ号>|<昵称>]`，模型据此认出主人；巩固时记忆也会绑定到具体的人。也可用 API 手动管理：`POST /v1/set_owner`（幂等）/ `GET /v1/owner`。
+
 ### 编程配置
 
 ```python

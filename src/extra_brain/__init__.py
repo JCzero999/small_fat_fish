@@ -123,4 +123,4 @@ __all__ = [
     "compute_retrievability",
 ]
 
-__version__ = "0.13.0"
+__version__ = "0.13.2"

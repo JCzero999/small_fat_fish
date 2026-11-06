@@ -450,6 +450,20 @@ class ExtraBrainServer:
         if method == "GET" and route == "/v1/stats":
             return self._brain(self._shell_peer_of(query, body)).storage_stats()
 
+        if method == "POST" and route == "/v1/set_owner":
+            entries = body.get("entries")
+            if not isinstance(entries, list) or not entries:
+                raise _HttpError(HTTPStatus.BAD_REQUEST, "entries must be a non-empty list of strings")
+            return self._brain(self._shell_peer_of(query, body)).set_owner_card(
+                [str(e) for e in entries]
+            )
+
+        if method == "GET" and route == "/v1/owner":
+            return {
+                "peer_id": self._shell_peer_of(query, body),
+                "owner_accounts": self._brain(self._shell_peer_of(query, body)).get_owner_card(),
+            }
+
         raise _HttpError(HTTPStatus.NOT_FOUND, f"unknown route {method} {route}")
 
     def _shell_peer(self, body: Mapping[str, Any]) -> str:

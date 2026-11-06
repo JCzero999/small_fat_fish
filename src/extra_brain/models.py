@@ -181,6 +181,9 @@ class UserStableProfile:
     key_traits: list[str] = field(default_factory=list)
     core_preferences: list[str] = field(default_factory=list)
     important_life_facts: list[str] = field(default_factory=list)
+    # v0.13.2 主人身份卡：跨 peer/跨宿主识别用户（"主人QQ:1975824324|称呼:JCzero|关系:父女"）。
+    # 始终随 Core 注入——群聊里模型据此 + 发言者标注认出主人，不依赖检索命中。
+    owner_accounts: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.preferred_name = _string(
@@ -193,6 +196,9 @@ class UserStableProfile:
         self.important_life_facts = _string_list(
             self.important_life_facts, "user_stable_profile.important_life_facts"
         )
+        self.owner_accounts = _string_list(
+            self.owner_accounts, "user_stable_profile.owner_accounts"
+        )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> UserStableProfile:
@@ -202,6 +208,7 @@ class UserStableProfile:
             key_traits=data.get("key_traits", []),
             core_preferences=data.get("core_preferences", []),
             important_life_facts=data.get("important_life_facts", []),
+            owner_accounts=data.get("owner_accounts", []),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -210,6 +217,7 @@ class UserStableProfile:
             "key_traits": list(self.key_traits),
             "core_preferences": list(self.core_preferences),
             "important_life_facts": list(self.important_life_facts),
+            "owner_accounts": list(self.owner_accounts),
         }
 
 

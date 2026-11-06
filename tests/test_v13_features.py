@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from extra_brain.extraction import ExtractionResult, SemanticCandidate  # noqa: E402
+from extra_brain import __version__
 from extra_brain.server import ExtraBrainServer, ShellSettings, make_server  # noqa: E402
 
 SHELL_TOKEN = "test-token-123"
@@ -134,7 +135,7 @@ class ShellAuthTests(ShellTestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["peer_id"], "local-main")
         self.assertTrue(body["read_write"])
-        self.assertEqual(body["version"], "0.13.0")
+        self.assertEqual(body["version"], __version__)
 
     def test_wrong_token_401(self) -> None:
         status, body = self.request("POST", "/v1/chat", {"message": "hi"}, token="wrong")

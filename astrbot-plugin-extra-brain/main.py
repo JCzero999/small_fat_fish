@@ -23,6 +23,7 @@ import random
 import re
 import sys
 import threading
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -256,6 +257,14 @@ class LocalBackend:
     def run_decay(self, peer_id: str) -> dict:
         return self._brain(peer_id).batch_decay()
 
+    # ── v0.13.2 主人身份卡 ────────────────────────────────────────
+
+    def set_owner(self, peer_id: str, entries: list[str]) -> dict:
+        return self._brain(peer_id).set_owner_card(entries)
+
+    def get_owner(self, peer_id: str) -> list[str]:
+        return self._brain(peer_id).get_owner_card()
+
     def set_proactive_enabled(self, peer_id: str, enabled: bool) -> bool:
         config = self._brain(peer_id).ensure_proactive_config(peer_id)
         config.enabled = enabled
@@ -333,6 +342,14 @@ class HttpBackend:
         if token_limit:
             body["token_limit"] = token_limit
         return self._post("/inject", body)
+
+    # ── v0.13.2 主人身份卡 ────────────────────────────────────────
+
+    def set_owner(self, peer_id: str, entries: list[str]) -> dict:
+        return self._post("/v1/set_owner", {"peer_id": peer_id, "entries": entries})
+
+    def get_owner(self, peer_id: str) -> list[str]:
+        return self._get(f"/v1/owner?peer_id={urllib.parse.quote(peer_id)}").get("owner_accounts", [])
 
     def consolidate(self, peer_id: str, messages: list[dict], session_id: str | None) -> dict:
         return self._post(
@@ -459,6 +476,8 @@ class ExtraBrainPlugin(star.Star):
         self._pending: dict[str, list[dict]] = {}  # peer_id -> 待巩固消息
         self._tasks: set = set()
         self._warned_once = False
+        # v0.13.2: 主人身份卡只同步一次的标志（写全局伴侣层 Core，跨 peer 生效）
+        self._owner_ensured = False
         # 主动开口：peer_id -> (最近一次人类消息时间, 最近 umo)，进程重启即重置
         self._last_human_at: dict[str, datetime] = {}
         self._last_umo: dict[str, str] = {}
@@ -497,6 +516,47 @@ class ExtraBrainPlugin(star.Star):
         return resolve_peer_id(
             event.unified_msg_origin, str(self.config.get("peer_scope", "auto"))
         )
+
+    # -- v0.13.2 主人身份卡 + 发言者标注 -----------------------------------
+
+    def _tag_sender(self, event: AstrMessageEvent, text: str) -> str:
+        """群聊消息加发言者标注（[发言者 <QQ号>|<昵称>]），私聊保持原文。
+
+        标注让抽取器把记忆绑定到具体的人、让注入上下文里模型知道「这句话是谁说的」，
+        配合全局 Core 里的主人身份卡即可在群聊中认出主人。
+        """
+        try:
+            group_id = str(event.get_group_id() or "")
+        except Exception:
+            group_id = ""
+        if not group_id:
+            return text
+        try:
+            sid = str(event.get_sender_id() or "")
+            name = str(event.get_sender_name() or "")
+        except Exception:
+            sid, name = "", ""
+        if not sid:
+            return text
+        return f"[发言者 {sid}|{name}] {text}"
+
+    def _ensure_owner_card(self, peer_id: str) -> None:
+        """把 user_config.json identity.owner_accounts 同步到全局伴侣层 Core（进程内一次）。"""
+        if self._owner_ensured:
+            return
+        self._owner_ensured = True
+        identity = self._user_config.get("identity") or {}
+        entries = identity.get("owner_accounts") if isinstance(identity, dict) else None
+        if not entries:
+            return
+        backend = self._backend_or_none()
+        if backend is None:
+            return
+        try:
+            result = backend.set_owner(peer_id, [str(e) for e in entries])
+            logger.info(f"extra-brain: 主人身份卡已同步 -> {result}")
+        except Exception as exc:
+            logger.warning(f"extra-brain: 主人身份卡同步失败：{exc}")
 
     _USER_CONFIG_CANDIDATES = (
         Path("config/user_config.json"),
@@ -730,6 +790,7 @@ class ExtraBrainPlugin(star.Star):
         event.set_extra(_INJECT_FLAG, True)
         prompt = (req.prompt or "").strip()
         peer_id = self._peer_of(event)
+        self._ensure_owner_card(peer_id)
 
         # 主动开口依据：记录人类活跃时间与回复路由
         self._last_human_at[peer_id] = datetime.now().astimezone()
@@ -739,9 +800,12 @@ class ExtraBrainPlugin(star.Star):
         if self._persona_text:
             req.system_prompt = self._swap_persona(req.system_prompt)
 
+        # v0.13.2：群聊消息标注发言者（检索 query 与巩固缓冲共用同一标注文本）
+        tagged = self._tag_sender(event, prompt) if prompt else prompt
+
         # 巩固用的 user 消息无条件捕获（不依赖 inject_enabled）
         if prompt:
-            self._pending.setdefault(peer_id, []).append({"role": "user", "content": prompt})
+            self._pending.setdefault(peer_id, []).append({"role": "user", "content": tagged})
 
         backend = self._backend_or_none()
         if backend is None or not self.config.get("inject_enabled", True) or not prompt:
@@ -752,7 +816,7 @@ class ExtraBrainPlugin(star.Star):
 
         try:
             result = await asyncio.to_thread(
-                backend.inject, peer_id, prompt, recent, token_limit
+                backend.inject, peer_id, tagged, recent, token_limit
             )
         except Exception as exc:
             logger.warning(f"extra-brain: 注入失败（peer={peer_id}）：{exc}")
