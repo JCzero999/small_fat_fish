@@ -998,13 +998,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         else "read-only (no DEEPSEEK_API_KEY)"
     )
     shell_state = (
-        f"shell on (peer {shell.peer_id}, {'token set' if shell.token else 'NO token'})"
+        f"shell on (peer {shell.peer_id}, token {shell.token if shell.token else 'MISSING — shell API will 401'})"
         if shell.enabled
         else "shell off"
     )
     print(f"extra_brain sidecar listening on http://{args.host}:{args.port} [{mode}] [{shell_state}]")
     if shell.enabled:
         print(f"chat shell UI: http://{args.host}:{args.port}/shell/")
+        if shell.token:
+            print("打开网页后如提示 Token 未设置，把上面日志里的 token 粘贴进去即可（只需一次）")
     print(f"data dir: {Path(args.data_dir).resolve()}")
     try:
         server.serve_forever()
