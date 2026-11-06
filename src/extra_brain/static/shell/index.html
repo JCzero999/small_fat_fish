@@ -108,7 +108,7 @@
 <div id="token-mask" class="hidden">
   <div id="token-card">
     <h3>Shell Token（必填，只需填一次）</h3>
-    <p>本机服务的访问令牌，用于鉴权，防止本机其他程序访问你的记忆库。填一次后存入浏览器 localStorage，之后不再询问。取值见服务启动日志，或 user_config.json 的 shell.shell_token。</p>
+    <p>本机服务的访问令牌，用于鉴权，防止本机其他程序访问你的记忆库。填一次后存入浏览器 localStorage，之后不再询问。取值见服务启动日志 [shell on (…, token …)]，或 user_config.json 的 shell.shell_token。若之前填过但仍报 401，说明服务端 token 已更换，请用日志里的最新值替换。</p>
     <input id="token-input" placeholder="粘贴 token…">
     <button id="btn-token-save" class="primary" style="width:100%">保存</button>
   </div>
@@ -278,10 +278,27 @@
   $("btn-token-save").onclick = function () {
     var v = $("token-input").value.trim();
     if (!v) { toast("token 不能为空", true); return; }
-    localStorage.setItem(TOKEN_KEY, v);
-    $("token-mask").classList.add("hidden");
-    refreshTokenBadge();
-    toast("Token 已保存，可以开始聊天了");
+    // 先向服务端验证，通过才保存——避免存了无效 token 还显示「已设置」
+    var btn = this;
+    btn.disabled = true; btn.textContent = "验证中…";
+    fetch("/v1/stats?peer_id=" + encodeURIComponent(peer()), {
+      headers: { "Authorization": "Bearer " + v }
+    }).then(function (r) {
+      if (r.status === 401) {
+        toast("token 与服务端不一致：请从服务启动日志 [shell on (…, token …)] 复制当前值", true);
+        return null;
+      }
+      return r.json().then(function () {
+        localStorage.setItem(TOKEN_KEY, v);
+        $("token-mask").classList.add("hidden");
+        refreshTokenBadge();
+        toast("Token 已验证并保存 ✔ 可以开始聊天了");
+      });
+    }).catch(function (e) {
+      toast("网络错误: " + e, true);
+    }).finally(function () {
+      btn.disabled = false; btn.textContent = "保存";
+    });
   };
   $("token-input").addEventListener("keydown", function (e) {
     if (e.key === "Enter") { $("btn-token-save").click(); }
