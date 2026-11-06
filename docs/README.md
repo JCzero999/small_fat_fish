@@ -36,7 +36,7 @@ cd D:\projects\small_fat_fish
 - `start-all.ps1` 内置端口占用检查（已在跑则跳过）与启动后健康检查（等 6185/6099 监听，最长各 90s/60s），启动成败会明确报告
 - 启动成功后：AstrBot WebUI `http://127.0.0.1:6185`，NapCat WebUI `http://127.0.0.1:6099/webui`，QQ 消息经 OneBot 反向 WS（6199）接入 AstrBot
 - DeepSeek API Key 优先读 `config/user_config.json` 的 `api.api_key`，其次环境变量 `DEEPSEEK_API_KEY`
-- ⚠️ 坑位：NapCat 必须用 4.18.41（位于 `D:\projects_software\napcat\NapCat.52230.Shell`）；AstrBot 工作目录必须是 `D:\projects_software\astrbot-runtime`；记忆库数据在 `D:\projects_software\astrbot-runtime\data\extra_brain\`，**不可重新初始化**
+- ⚠️ 坑位：NapCat 必须用 4.18.41（位于 `D:\projects_software\napcat\NapCat.52230.Shell`）；AstrBot 工作目录必须是 `D:\projects_software\astrbot-runtime`；记忆库数据统一在仓库 `D:\projects\small_fat_fish\extra-brain\`（2026-11-07 起，所有宿主挂载点都指向这里；原 `astrbot-runtime\data\extra_brain` 保留作备份），**不可重新初始化**
 - 兜底：若脚本停不干净，手动结束 `python` / `QQ` / `NapCatWinBootMain` 进程
 
 ### 方式二：独立 Chat 主场（不开 QQ）
@@ -46,13 +46,13 @@ cd D:\projects\small_fat_fish
 export DEEPSEEK_API_KEY="你的密钥"
 export SHELL_TOKEN="dev-token-change-me"
 # ① 独立主场（记忆与 QQ 隔离，peer=local-main）：
+python -m extra_brain.server --data-dir extra-brain-alt
+# ② 常规启动（统一数据源，仓库 extra-brain/，与 QQ 记忆互通）：
 python -m extra_brain.server --data-dir extra-brain
-# ② 与 QQ 记忆互通（必须指向 AstrBot 同一数据目录，且 shell_peer_id 设为 QQ 私聊 peer）：
-python -m extra_brain.server --data-dir "D:\projects_software\astrbot-runtime\data\extra_brain"
 # 浏览器打开 http://127.0.0.1:8756/shell/，粘贴 token 即可聊
 ```
 
-> 互通要点：① `--data-dir` 与 AstrBot 插件指向同一目录；② `config/user_config.json` 的 `shell.shell_peer_id` 设为 `qq:FriendMessage:<你的QQ号>`。两个条件缺一不可。
+> **数据架构**：记忆唯一真相源是仓库下的 `D:\projects\small_fat_fish\extra-brain\`（数据即资产，不入 git）。AstrBot 插件配置的 `data_dir` 已指向这里；Shell、将来的抖音等任何宿主都挂载同一目录，靠 `peer_id` 隔离各端各人。**互通要点**：`config/user_config.json` 的 `shell.shell_peer_id` 已设为 `qq:FriendMessage:<QQ号>`，Shell 与 QQ 私聊共用同一记忆库。
 
 仅 Windows 下若 `python` 不在 PATH，用 conda 环境：`C:\Users\19758\miniconda3\envs\astrbot\python.exe -m extra_brain.server`（需 `$env:PYTHONPATH = "src"`）。
 

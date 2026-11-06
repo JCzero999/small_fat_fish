@@ -193,7 +193,7 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 ## 6. 必须知道的坑（接手先读）
 
-0. ⚠️ **记忆库数据库初始化（超级重要，必须亲自确认）**：`data/extra_brain/` 目录下的 2 个 `.db` 文件（私聊按 QQ 号、WebChatUI 按登录用户隔离）只能在**最开始的时候初始化一次**。之后**不能随意删除或重新初始化**——这会导致该 peer 的全部长期记忆（Core、语义、情节、风格记忆 + 向量 + 审计日志）永久丢失。如果真需要重新初始化，必须**先征得本人（用户）亲自确认**，切勿自行决定。这是记忆库作为「产品」的核心资产，数据即资产，切勿误删。
+0. ⚠️ **记忆库数据库初始化（超级重要，必须亲自确认）**：**2026-11-07 起数据目录统一为仓库下的 `D:\projects\small_fat_fish\extra-brain\`**（此前在 `D:\projects_software\astrbot-runtime\data\extra_brain\`，已完整迁移并校验，旧目录保留作备份）。各 `.db` 文件（私聊按 QQ 号、群聊按群号、WebChatUI 按登录用户隔离）只能在**最开始的时候初始化一次**。之后**不能随意删除或重新初始化**——这会导致该 peer 的全部长期记忆（Core、语义、情节、风格记忆 + 向量 + 审计日志）永久丢失。如果真需要重新初始化，必须**先征得本人（用户）亲自确认**，切勿自行决定。这是记忆库作为「产品」的核心资产，数据即资产，切勿误删。
 
 1. **peer_id 不能用会话 ID**。AstrBot 的 webchat umo 是 `webchat:FriendMessage:webchat!<user>!<conv_id>`，**conv_id 每开一个新对话就变**——必须剥掉（适配器 `resolve_peer_id` 已处理，2026-10-31 首版正则没对上三段式 umo 导致每会话一个库，跨会话验证当场暴露）。QQ 侧天然正确：`aiocqhttp:FriendMessage:<QQ号>` / `GroupMessage:<群号>` 本身稳定。DSH 侧等价坑：`session.id` 每「新会话」一个新 peer。
 2. **NapCat v4.18.42 启动即崩（error code v2:-8）**：已知回归 bug（[issue #2145](https://github.com/NapNeko/NapCatQQ/issues/2145)），同环境 4.18.41 正常。**本机固定用 4.18.41**（payload 在 `D:\temp\napcat-41841`，已替换进 Shell 目录）。升级 NapCat 前先查该 issue。
@@ -243,7 +243,7 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 - **独立主场（v0.13）**：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`（token：`SHELL_TOKEN` env / `config/user_config.json` 的 `shell.shell_token`；无 GUI 回归 `python scripts/shell_regression.py`，退出码 0/1）
 - **启动全部（QQ）**：`.\scripts\start-all.ps1`（工作目录：仓库根；顺带拉起 AstrBot + NapCat，内置端口占用检查。等价手动命令：conda env `astrbot` 下 `astrbot.exe run`，工作目录 `D:\projects_software\astrbot-runtime`）
 - **停止全部**：`.\scripts\stop-all.ps1`；若中断（曾遇 exit -1）用 `Get-Process | ? {$_.ProcessName -in 'python','astrbot','QQ','NapCatWinBootMain'} | Stop-Process -Force` 兜底，再确认三端口清空
-- **插件配置**：`D:\projects_software\astrbot-runtime\data\config\astrbot_plugin_extra_brain_config.json`（`companion_db: "data/extra_brain/_global_companion.db"`）
+- **插件配置**：`D:\projects_software\astrbot-runtime\data\config\astrbot_plugin_extra_brain_config.json`（`data_dir` / `companion_db` 已指向 `D:/projects/small_fat_fish/extra-brain`，2026-11-07 起）
 - **验证记忆**：暗号三步法见 §5（WebChatUI 与 QQ 两套均已验证）
 - **AstrBot dashboard**：`http://127.0.0.1:6185`（密码见启动横幅/环境变量方式见 §4）
 - **机器人 QQ**：`1178469499`（NapCat WebUI：`http://127.0.0.1:6099/webui`，token 见 NapCat 启动日志）

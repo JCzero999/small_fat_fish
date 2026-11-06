@@ -24,7 +24,7 @@ Get-Process | Where-Object { $_.ProcessName -in @('python', 'astrbot', 'QQ', 'Na
 
 Write-Host '' -ForegroundColor Cyan
 Write-Host '=== Memory DB ===' -ForegroundColor Cyan
-$memDir = 'D:\projects_software\astrbot-runtime\data\extra_brain'
+$memDir = 'D:\projects\small_fat_fish\extra-brain'
 if (Test-Path $memDir) {
     Get-ChildItem $memDir -Filter '*.db' | Select-Object Name, @{N='KB';E={[math]::Round($_.Length / 1KB)}} | Format-Table -AutoSize
 } else {
