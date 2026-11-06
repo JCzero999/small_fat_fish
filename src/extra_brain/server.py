@@ -36,8 +36,10 @@ The server always binds ``127.0.0.1`` by default; do not expose it publicly.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import secrets
 import threading
 from datetime import datetime
@@ -55,6 +57,17 @@ from .models import MemoryValidationError, parse_iso8601
 
 _SHELL_STATIC_DIR = Path(__file__).resolve().parent / "static" / "shell"
 _PERSONA_MAX_CHARS = 3000
+
+
+def _filename_for_peer(peer_id: str) -> str:
+    """peer_id → 合法且唯一的文件名（与 AstrBot 插件 main.py 同一编码，保证互通）。
+
+    umo 形如 ``qq:FriendMessage:1975824324``，含 ``:`` 等文件名非法字符，
+    统一替换为 ``_`` 并追加 md5 前 8 位防碰撞。
+    """
+    safe = re.sub(r"[^A-Za-z0-9_@.-]+", "_", peer_id).strip("_") or "peer"
+    digest = hashlib.md5(peer_id.encode("utf-8")).hexdigest()[:8]
+    return f"{safe[:64]}-{digest}"
 
 
 def _strip_persona_markdown(text: str) -> str:
@@ -173,9 +186,9 @@ class ExtraBrainServer:
         self.extractor = extractor
         self.read_only = bool(read_only)
         self.encryption_passphrase = encryption_passphrase
-        # 未显式指定时默认 data_dir/_global.db —— 全局伴侣层（人设/稳定偏好跨场景共享）
+        # 未显式指定时默认 data_dir/_global_companion.db —— 与 AstrBot 插件全局伴侣库同名，保证人设互通
         self.companion_db = (
-            Path(companion_db) if companion_db else self.data_dir / "_global.db"
+            Path(companion_db) if companion_db else self.data_dir / "_global_companion.db"
         )
         self._brains: dict[str, ExtraBrain] = {}
         self._lock = threading.RLock()
@@ -229,7 +242,7 @@ class ExtraBrainServer:
             if brain is None:
                 self.data_dir.mkdir(parents=True, exist_ok=True)
                 brain = ExtraBrain(
-                    self.data_dir / f"{peer_id}.db",
+                    self.data_dir / f"{_filename_for_peer(peer_id)}.db",
                     extractor=self.extractor,
                     config=self.config,
                     read_only=True,
@@ -281,7 +294,7 @@ class ExtraBrainServer:
             if brain is None:
                 self.data_dir.mkdir(parents=True, exist_ok=True)
                 brain = ExtraBrain(
-                    self.data_dir / f"{peer_id}.db",
+                    self.data_dir / f"{_filename_for_peer(peer_id)}.db",
                     extractor=self.extractor,
                     config=self.config,
                     read_only=self.read_only,

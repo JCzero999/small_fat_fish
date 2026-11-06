@@ -8,7 +8,10 @@
   token 错误/缺失 → `401 {"error": "invalid or missing shell token"}`。
 - **绑定**：默认 `127.0.0.1`（配置强制），请勿对公网开放。
 - **默认 peer**：`local-main`（可用 `SHELL_PEER_ID` / `shell.shell_peer_id` 改）；请求体可传
-  `peer_id` 覆盖。每个 peer 一个 SQLite：`<data-dir>/<peer_id>.db`。
+  `peer_id` 覆盖。每个 peer 一个 SQLite，文件名为编码后的 `<data-dir>/<safe>-<md5前8>.db`
+  （与 AstrBot 插件同一编码，`qq:FriendMessage:1975824324` → `qq_FriendMessage_1975824324-e46c8efb.db`）。
+  **与 QQ 记忆互通**：把 `shell.shell_peer_id` 设为 QQ 私聊 peer（如 `qq:FriendMessage:1975824324`）即可共用同一记忆库；
+  全局伴侣库默认同为 `<data-dir>/_global_companion.db`，人设跨端一致。
 - **Web UI**：`GET /` 或 `/shell/` 返回最小聊天页（token 存 localStorage）。
 
 ---

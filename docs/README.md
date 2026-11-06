@@ -15,7 +15,7 @@ python -m extra_brain.server --data-dir extra-brain
 # 浏览器打开 http://127.0.0.1:8756/shell/
 ```
 
-- **默认 peer**：`local-main`（独立于 QQ 各 peer；`SHELL_PEER_ID` 可改）
+- **默认 peer**：`local-main`（独立于 QQ 各 peer；`SHELL_PEER_ID` 可改）。**想和 QQ 私聊记忆互通**：把 `user_config.json` 的 `shell.shell_peer_id` 设为 QQ 私聊 peer（如 `qq:FriendMessage:1975824324`），Shell 与 QQ 打开同一个记忆库，她在外面认识你、在这里也认识你；global 伴侣库同为 `_global_companion.db`，人设跨端一致
 - **API**：`/v1/health`（免鉴权）、`/v1/chat`、`/v1/consolidate`、`/v1/inject_preview`、`/v1/core`、`/v1/stats`——除 health 外需 `Authorization: Bearer <token>` 或 `X-Shell-Token`；只绑 `127.0.0.1`，勿对公网开放。契约示例见 `SHELL_API.md`
 - **与 QQ 的关系**：AstrBot 插件继续可用（同 data-dir 不同 peer 互不影响）；文档与默认引导指向主场，QQ 降级为挂载点之一
 - **无 GUI 回归**：`python scripts/shell_regression.py`（六步闭环，无 Key 自动 SKIP）
@@ -45,9 +45,14 @@ cd D:\projects\small_fat_fish
 # Key 可省略（user_config.json 优先）；SHELL_TOKEN 不设则启动时随机生成并打印一次
 export DEEPSEEK_API_KEY="你的密钥"
 export SHELL_TOKEN="dev-token-change-me"
+# ① 独立主场（记忆与 QQ 隔离，peer=local-main）：
 python -m extra_brain.server --data-dir extra-brain
+# ② 与 QQ 记忆互通（必须指向 AstrBot 同一数据目录，且 shell_peer_id 设为 QQ 私聊 peer）：
+python -m extra_brain.server --data-dir "D:\projects_software\astrbot-runtime\data\extra_brain"
 # 浏览器打开 http://127.0.0.1:8756/shell/，粘贴 token 即可聊
 ```
+
+> 互通要点：① `--data-dir` 与 AstrBot 插件指向同一目录；② `config/user_config.json` 的 `shell.shell_peer_id` 设为 `qq:FriendMessage:<你的QQ号>`。两个条件缺一不可。
 
 仅 Windows 下若 `python` 不在 PATH，用 conda 环境：`C:\Users\19758\miniconda3\envs\astrbot\python.exe -m extra_brain.server`（需 `$env:PYTHONPATH = "src"`）。
 

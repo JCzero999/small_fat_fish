@@ -34,6 +34,7 @@
     "shell_enabled": true,
     "shell_peer_id": "local-main",
     "shell_token": "",
-    "auto_consolidate_every_n": 0
+    "auto_consolidate_every_n": 0,
+    "_comment": "shell_peer_id=local-main 表示与 QQ 记忆隔离的独立主场；想和 QQ 私聊记忆互通，改成 QQ 私聊 peer_id，如 qq:FriendMessage:1975824324（文件名会自动编码对齐，无需手动处理）。"
   }
 }
