@@ -1,7 +1,7 @@
 # 交接文档（Handover）
 
 > 给接手本仓库的人：这份文档说明「现在做到哪了、怎么跑起来、有哪些坑、下一步干什么」。
-> 最后更新：2026-11-05（v0.12.1 表达与人设层：persona/xiaotun_v1.md 人设正文注入 + 诚实契约行 + 群聊规矩 + 签名/空间引导词人设化；254 项测试全绿。此前 v0.12.0 方案 B FSRS 牢固度、v0.11.0 方案 A 生活感。**当前处于 A/B 真实验收期**；下一期：表达层人工验收 H1–H6 → 方案 C 自主记账。方案文档见 `小豚「表达与人设层」迭代方案V0.12.1.md`；交接打包见 §9–10）。
+> 最后更新：2026-11-06（v0.13.0 主场迁移：独立 Chat Shell + Agent API——`/v1/chat|consolidate|inject_preview|health` + Bearer 鉴权 + 最小 Web UI（`/shell/`）+ `scripts/shell_regression.py` 真实 LLM 回归全绿；默认 peer `local-main`，旧 QQ peer 零迁移。276 项测试全绿。此前 v0.12.1 表达与人设层（A/B 真实验收与 H1–H6 人工验收仍在进行）；下一期 v0.14.0 方案 C 自主记账。主场契约见 `PRODUCT_NORTH.md` / `SHELL_API.md`）。
 
 ---
 
@@ -35,8 +35,9 @@
 
 | 部分 | 状态 |
 |------|------|
-| Python 记忆库 | ✅ **v0.12.1**：v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子 + **v0.11.0 方案 A 生活感：ActiveGoal 结构化（deadline + 到期主动提醒，最高优先级由头）+ 「忽然想起」由头（概率骰/冷却/日额度）+ 影子模式（SelfState/倾向记录但不注入）** + **v0.12.0 方案 B FSRS 牢固度：stability/retrievability/frozen——想起加固、久不提衰减、淡到 0.35 冻结（不进自动注入/忽然想起，但 search/list 仍可查），保护项永不冻结，批量衰减巩固末尾 6h 节流** + **v0.12.1 表达与人设层：persona 正文注入（persona/xiaotun_v1.md → system prompt）+ 诚实契约行（honesty_footer）+ 群聊规矩/签名空间引导词人设化**。**254 项单测全绿**（249 原有零修改 + 5 新增，1 skipped），真实 DeepSeek + 三天闭环联测通过 |
-| sidecar（HTTP 服务） | ✅ 已落地并扩展：`/stats`、`/forget`、`--read-only`、加密口令透传；v0.11.0 新增 `/shadow`、`/confirm_goal`、`/confirm_sudden`；v0.12.0 新增 `/freeze`、`/decay` |
+| Python 记忆库 | ✅ **v0.13.0**：主场迁移——**独立 Chat Shell（`/shell/` Web UI）+ Agent HTTP API（`/v1/chat|consolidate|inject_preview|health|core|stats`，Bearer token 鉴权，默认 peer `local-main`）**；此前累计 v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子 + v0.11.0 方案 A 生活感 + v0.12.0 方案 B FSRS 牢固度 + v0.12.1 表达与人设层。**276 项单测全绿**（254 原有零修改 + 22 新增，2 skipped），真实 DeepSeek 无 GUI 回归（`scripts/shell_regression.py`）通过 |
+| **Chat Shell（主场）** | ✅ **v0.13.0 已落地**：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`；token 见 `SHELL_TOKEN` env 或 `config/user_config.json` 的 `shell.shell_token`（本机已设 `xtn-shell-local-1a2b3c4d`）；契约见 `docs/SHELL_API.md`；北极星见 `docs/PRODUCT_NORTH.md` |
+| sidecar（HTTP 服务） | ✅ 已落地并扩展：旧端点（`/inject` `/consolidate` `/stats` `/forget` `/shadow` `/freeze` `/decay` 等）保持不变（AstrBot http 后端兼容）；v0.13.0 新增 `/v1/*` 与静态 UI，`--no-shell` 可关闭 |
 | CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 254 项单测 + CLI 冒烟 |
 | **AstrBot 适配器** | ✅ **已端到端验证**：注入、巩固、peer 跨会话共享、`/memory` 指令、暗号验证通过（2026-10-31） |
 | **QQ 通道（NapCat + OneBot v11）** | ✅ **已端到端验证**：私聊按 QQ 号隔离记忆、`/reset` 后跨上下文答出暗号（2026-11-01） |
@@ -45,7 +46,7 @@
 | DSH 适配器 | ⛔ 插件模块加载失败（根因已定位见坑 4，**已被 AstrBot 路线取代，暂搁置**） |
 | 定时/消息阈值自动巩固 | ✅ 阈值触发已实现（AstrBot 适配器内）；**主动开口循环已上线运行**（proactive_enabled=true，20 分钟/30%概率/每日≤5/22–8 免打扰） |
 
-**一句话**：记忆库 v0.12.1（v0.7.0 SelfState → v0.8.0 DispositionSeed → v0.9.0 疲劳完整化 + 人生快照 → v0.10.0 user_config 集中配置 + 10 条安全规范 → v0.11.0 方案 A 生活感：约定到期提醒 / 忽然想起 / 影子模式 → v0.12.0 方案 B FSRS 牢固度：想起就牢、久不提就淡、淡忘冻结仍可查 → v0.12.1 表达与人设层：小豚人设正文 + 诚实契约 + 群聊规矩，254 项测试全绿）→ AstrBot → QQ 全链路跑通；机器人 QQ 号 `1178469499` 常驻本机（Startup 看门狗托管）；旧数据零迁移兼容、主动开口循环运行中。
+**一句话**：记忆库 v0.13.0（…v0.12.1 表达与人设层 → **v0.13.0 主场迁移：独立 Chat Shell + /v1 Agent API，默认 peer `local-main`，QQ 降级为挂载点**，276 项测试全绿 + 真实 LLM 回归通过）→ AstrBot → QQ 全链路此前已跑通且不受影响；机器人 QQ 号 `1178469499`（Startup 看门狗托管）；旧数据零迁移兼容、主动开口循环运行中。**不打开 QQ：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`**。
 
 ---
 
@@ -75,16 +76,17 @@ small_fat_fish/
 │   ├── storage.py consolidation.py retrieval.py
 │   ├── session.py engine.py server.py cli.py
 │   ├── self_state.py disposition.py goals.py solidity.py   # v0.7–v0.12 各期模块
-├── scripts/                              # start-all / stop-all / status-all + watchdog + demo_closed_loop
+│   └── static/shell/index.html                             # ★ v0.13 Chat Shell UI（/shell/ 挂载）
+├── scripts/                              # start-all / stop-all / status-all + watchdog + demo_closed_loop + shell_regression
 ├── config/
-│   ├── user_config.json.template          # ★ 用户配置模板（人设文件指针/安全规范/API Key/主动开口/shadow/honesty/group）
+│   ├── user_config.json.template          # ★ 用户配置模板（人设文件指针/安全规范/API Key/主动开口/shadow/honesty/group/shell）
 │   └── user_config.json                   # 实际配置（gitignore，从模板复制后自行填写）
-├── astrbot-plugin-extra-brain/           # ★ AstrBot 适配器（当前主力挂载）
+├── astrbot-plugin-extra-brain/           # AstrBot 适配器（QQ 挂载点，不再唯一）
 │   ├── main.py                           # 薄适配器：双钩子 + /memory 指令 + local/http 双后端
 │   ├── _conf_schema.json                 # WebUI 配置面板 schema
 │   └── README.md
 ├── dsh-plugin-extra-brain/               # DSH 适配器（暂搁置，加载坑见 §6 坑 4）
-└── tests/                                # 254 项测试（test_extra_brain 24 + test_server 12 + test_v2_features 124 + test_v11_features 53 + test_v12_features 36 + test_v121_features 5）
+└── tests/                                # 276 项测试（…+ test_v13_features 22 项）
 
 * test_v2_features 覆盖 v0.2–v0.5 全部新特性 + 情感状态机集成链路（双时态/人格锚/保留度/四路召回/陪伴层/加密/HNSW/遗忘链/emotion_state）。
 ```
@@ -237,8 +239,9 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 ## 8. 交接要点速查
 
-- **跑测试**：`python -m unittest discover -s tests -v`（应 249/249 OK，1 skipped；3.11/3.12 均可）
-- **启动全部**：`.\scripts\start-all.ps1`（工作目录：仓库根；顺带拉起 AstrBot + NapCat，内置端口占用检查。等价手动命令：conda env `astrbot` 下 `astrbot.exe run`，工作目录 `D:\projects_software\astrbot-runtime`）
+- **跑测试**：`python -m unittest discover -s tests -v`（应 276/276 OK，2 skipped；3.11/3.12 均可）
+- **独立主场（v0.13）**：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`（token：`SHELL_TOKEN` env / `config/user_config.json` 的 `shell.shell_token`；无 GUI 回归 `python scripts/shell_regression.py`，退出码 0/1）
+- **启动全部（QQ）**：`.\scripts\start-all.ps1`（工作目录：仓库根；顺带拉起 AstrBot + NapCat，内置端口占用检查。等价手动命令：conda env `astrbot` 下 `astrbot.exe run`，工作目录 `D:\projects_software\astrbot-runtime`）
 - **停止全部**：`.\scripts\stop-all.ps1`；若中断（曾遇 exit -1）用 `Get-Process | ? {$_.ProcessName -in 'python','astrbot','QQ','NapCatWinBootMain'} | Stop-Process -Force` 兜底，再确认三端口清空
 - **插件配置**：`D:\projects_software\astrbot-runtime\data\config\astrbot_plugin_extra_brain_config.json`（`companion_db: "data/extra_brain/_global_companion.db"`）
 - **验证记忆**：暗号三步法见 §5（WebChatUI 与 QQ 两套均已验证）

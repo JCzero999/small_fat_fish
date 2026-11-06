@@ -1,8 +1,64 @@
 # Extra Brain（额外大脑）
 
-依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.12.1**（方案 A 生活感补全 + 方案 B FSRS 风格牢固度 + 表达与人设层：persona 正文注入 / 诚实契约 / 群聊规矩），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
+依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.13.0**（独立 Chat 主场 + Agent API；此前 v0.12.1 表达与人设层、v0.12.0 方案 B FSRS 牢固度、v0.11.0 方案 A 生活感），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
 
-> **文档索引**：设计规范见 `长期记忆「额外大脑」架构规范 v0.9.md`（第 10 节为实现对照）；DSH 宿主接入与跨会话验证见 `HANDOVER.md`；变更记录见 `CHANGELOG.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`；**AstrBot 挂载（当前主力）见 `../astrbot-plugin-extra-brain/README.md`；挂载到任意宿主的通用契约见 `MOUNT.md`；迭代路线图见 `MEMORY_ITERATION_PLAN.md`**。本文档位于 `docs/` 目录。
+> **文档索引**：设计规范见 `长期记忆「额外大脑」架构规范 v0.9.md`（第 10 节为实现对照）；DSH 宿主接入与跨会话验证见 `HANDOVER.md`；变更记录见 `CHANGELOG.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`；**AstrBot 挂载（QQ 通道）见 `../astrbot-plugin-extra-brain/README.md`；挂载到任意宿主的通用契约见 `MOUNT.md`；独立 Chat 主场契约见 `PRODUCT_NORTH.md` / `SHELL_API.md`；迭代路线图见 `MEMORY_ITERATION_PLAN.md`**。本文档位于 `docs/` 目录。
+
+## 独立 Chat 主场（v0.13.0）
+
+**不打开 QQ 也能和小豚聊**。记忆唯一真相源仍是 `extra_brain` SQLite（按 peer），Web Shell 与 API 人机同权，旧 QQ 库零迁移。
+
+```bash
+export DEEPSEEK_API_KEY="你的密钥"        # 可省略：user_config.json 的 api.api_key 优先
+export SHELL_TOKEN="dev-token-change-me"  # 可省略：不设则启动时随机生成并打印一次
+python -m extra_brain.server --data-dir extra-brain
+# 浏览器打开 http://127.0.0.1:8756/shell/
+```
+
+- **默认 peer**：`local-main`（独立于 QQ 各 peer；`SHELL_PEER_ID` 可改）
+- **API**：`/v1/health`（免鉴权）、`/v1/chat`、`/v1/consolidate`、`/v1/inject_preview`、`/v1/core`、`/v1/stats`——除 health 外需 `Authorization: Bearer <token>` 或 `X-Shell-Token`；只绑 `127.0.0.1`，勿对公网开放。契约示例见 `SHELL_API.md`
+- **与 QQ 的关系**：AstrBot 插件继续可用（同 data-dir 不同 peer 互不影响）；文档与默认引导指向主场，QQ 降级为挂载点之一
+- **无 GUI 回归**：`python scripts/shell_regression.py`（六步闭环，无 Key 自动 SKIP）
+
+## 启动项目
+
+项目有两条运行路径：**QQ 机器人全链路**（默认日常形态）和**独立 Chat 主场**（不开 QQ 直接和小豚聊）。两者共用同一套记忆库（按 peer 隔离，互不影响），可同时运行。
+
+### 方式一：QQ 机器人全链路（AstrBot + NapCat，Windows PowerShell）
+
+```powershell
+cd D:\projects\small_fat_fish
+.\scripts\start-all.ps1 1178469499   # 一键拉起 AstrBot + NapCat（快速登录）
+.\scripts\status-all.ps1             # 随时查看三端口 / 进程 / 记忆库状态
+.\scripts\stop-all.ps1               # 停止全部
+```
+
+- `start-all.ps1` 内置端口占用检查（已在跑则跳过）与启动后健康检查（等 6185/6099 监听，最长各 90s/60s），启动成败会明确报告
+- 启动成功后：AstrBot WebUI `http://127.0.0.1:6185`，NapCat WebUI `http://127.0.0.1:6099/webui`，QQ 消息经 OneBot 反向 WS（6199）接入 AstrBot
+- DeepSeek API Key 优先读 `config/user_config.json` 的 `api.api_key`，其次环境变量 `DEEPSEEK_API_KEY`
+- ⚠️ 坑位：NapCat 必须用 4.18.41（位于 `D:\projects_software\napcat\NapCat.52230.Shell`）；AstrBot 工作目录必须是 `D:\projects_software\astrbot-runtime`；记忆库数据在 `D:\projects_software\astrbot-runtime\data\extra_brain\`，**不可重新初始化**
+- 兜底：若脚本停不干净，手动结束 `python` / `QQ` / `NapCatWinBootMain` 进程
+
+### 方式二：独立 Chat 主场（不开 QQ）
+
+```bash
+# Key 可省略（user_config.json 优先）；SHELL_TOKEN 不设则启动时随机生成并打印一次
+export DEEPSEEK_API_KEY="你的密钥"
+export SHELL_TOKEN="dev-token-change-me"
+python -m extra_brain.server --data-dir extra-brain
+# 浏览器打开 http://127.0.0.1:8756/shell/，粘贴 token 即可聊
+```
+
+仅 Windows 下若 `python` 不在 PATH，用 conda 环境：`C:\Users\19758\miniconda3\envs\astrbot\python.exe -m extra_brain.server`（需 `$env:PYTHONPATH = "src"`）。
+
+### 启动后验证
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests   # 全量单测（v0.13.0：276 项）
+python scripts/shell_regression.py                     # Shell 六步真实 LLM 闭环（无 Key 自动 SKIP）
+curl http://127.0.0.1:8756/v1/health                   # Shell 存活检查（免鉴权）
+.\scripts\status-all.ps1                               # QQ 链路三端口检查
+```
 
 ## 已实现
 

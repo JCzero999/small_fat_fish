@@ -4,27 +4,41 @@ The host plugin is TypeScript; this server is the language bridge. Each peer get
 its own SQLite file under ``<data_dir>/<peer_id>.db`` so private chats and group
 chats stay isolated.
 
-Endpoints
----------
+Endpoints (legacy sidecar surface)
+----------------------------------
 GET  /health                      -> {"ok": true, "peers": <count>}
 POST /inject                      -> build_injection(...) as JSON
 POST /consolidate                 -> consolidate(messages, session_id) report
 GET  /core?peer_id=...            -> CoreMemory as JSON (debug/inspection)
 GET  /list?peer_id=...&kind=...   -> memory list (debug/inspection)
 
+Endpoints (v0.13.0 shell surface, Bearer-token auth)
+----------------------------------------------------
+GET  /v1/health                   -> shell health (no auth required)
+GET  /v1/inject_preview?q=...     -> injection preview (read-only, never writes)
+POST /v1/consolidate              -> consolidate a session (default peer local-main)
+POST /v1/chat                     -> persona + injection + safety -> LLM reply
+GET  /v1/core                     -> Core Memory of the shell peer (debug)
+GET  /shell/  (also "/")          -> minimal web chat UI
+
 Run
 ---
     export DEEPSEEK_API_KEY="..."
+    export SHELL_TOKEN="dev-token-change-me"
     python -m extra_brain.server --data-dir ./extra-brain --port 8756
+    # open http://127.0.0.1:8756/shell/
 
-Without ``DEEPSEEK_API_KEY`` the server still starts, but ``/consolidate`` returns
-503 (read-only mode); ``/inject``, ``/core``, ``/list`` keep working.
+Without ``DEEPSEEK_API_KEY`` the server still starts, but ``/consolidate`` and
+``/v1/chat`` return 503 (read-only mode); preview/read endpoints keep working.
+The server always binds ``127.0.0.1`` by default; do not expose it publicly.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import secrets
 import threading
 from datetime import datetime
 from http import HTTPStatus
@@ -33,10 +47,100 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qs, urlparse
 
+from . import __version__
 from .config import MemoryConfig
 from .engine import ExtraBrain
 from .extraction import ExtractionError, MemoryExtractor, OpenAICompatibleExtractor
 from .models import MemoryValidationError, parse_iso8601
+
+_SHELL_STATIC_DIR = Path(__file__).resolve().parent / "static" / "shell"
+_PERSONA_MAX_CHARS = 3000
+
+
+def _strip_persona_markdown(text: str) -> str:
+    """v0.12.1 与 AstrBot 适配器同规则：剥标题头与 <!-- 注释区 -->。"""
+    lines: list[str] = []
+    in_comment = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("<!--"):
+            in_comment = True
+            continue
+        if in_comment:
+            if stripped.endswith("-->"):
+                in_comment = False
+            continue
+        if not lines and stripped.startswith("#"):
+            continue  # 标题头不注入
+        lines.append(line)
+    cleaned = "\n".join(lines).strip()
+    if len(cleaned) > _PERSONA_MAX_CHARS:
+        cleaned = cleaned[:_PERSONA_MAX_CHARS]
+    return cleaned
+
+
+def _resolve_config_path(raw: str, config_dir: Path | None) -> Path | None:
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate if candidate.is_file() else None
+    bases = [Path.cwd(), config_dir]
+    if config_dir is not None:
+        bases += [config_dir.parent, config_dir.parent.parent]
+    for base in bases:
+        if base is None:
+            continue
+        resolved = base / raw
+        if resolved.is_file():
+            return resolved
+    return None
+
+
+class ShellSettings:
+    """v0.13.0 主场（Chat Shell）配置。
+
+    Resolution order: explicit args > environment variables > user_config.json.
+    """
+
+    def __init__(
+        self,
+        *,
+        enabled: bool | None = None,
+        peer_id: str | None = None,
+        token: str | None = None,
+        env: Mapping[str, str] | None = None,
+        user_config: Mapping[str, Any] | None = None,
+        auto_consolidate_every_n: int | None = None,
+    ) -> None:
+        env = env if env is not None else dict(os.environ)
+        user_config = user_config or {}
+        shell_cfg = user_config.get("shell") if isinstance(user_config.get("shell"), dict) else {}
+
+        def _pick(env_key: str, cfg_key: str, default: Any) -> Any:
+            raw = env.get(env_key)
+            if raw is not None and raw != "":
+                return raw
+            value = shell_cfg.get(cfg_key, user_config.get(cfg_key))
+            if value is None or value == "":
+                return default
+            return value
+
+        # 显式参数 > 环境变量 > user_config > 默认值
+        enabled_raw = enabled if enabled is not None else _pick("SHELL_ENABLED", "shell_enabled", True)
+        if isinstance(enabled_raw, str):
+            self.enabled = enabled_raw.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            self.enabled = bool(enabled_raw)
+        peer_raw = peer_id if peer_id else _pick("SHELL_PEER_ID", "shell_peer_id", "local-main")
+        self.peer_id = str(peer_raw or "local-main")
+        token_raw = token if token else _pick("SHELL_TOKEN", "shell_token", "")
+        self.token = str(token_raw or "")
+        n_raw = auto_consolidate_every_n if auto_consolidate_every_n is not None else _pick(
+            "SHELL_AUTO_CONSOLIDATE_EVERY_N", "auto_consolidate_every_n", 0
+        )
+        try:
+            self.auto_consolidate_every_n = int(n_raw)
+        except (TypeError, ValueError):
+            self.auto_consolidate_every_n = 0
 
 
 class ExtraBrainServer:
@@ -57,6 +161,12 @@ class ExtraBrainServer:
         read_only: bool = False,
         encryption_passphrase: str | None = None,
         companion_db: str | Path | None = None,
+        shell: ShellSettings | None = None,
+        user_config: Mapping[str, Any] | None = None,
+        user_config_path: str | Path | None = None,
+        chat_client: Any = None,
+        persona_text: str | None = None,
+        safety_rules: Sequence[str] | None = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.config = config or MemoryConfig()
@@ -69,6 +179,91 @@ class ExtraBrainServer:
         )
         self._brains: dict[str, ExtraBrain] = {}
         self._lock = threading.RLock()
+        # v0.13.0 shell（主场）：只读预览库不落激活写入，保证 inject_preview 纯读
+        self._preview_brains: dict[str, ExtraBrain] = {}
+        self.shell = shell or ShellSettings(
+            user_config=user_config,
+        )
+        self.user_config = dict(user_config or {})
+        self.user_config_path = Path(user_config_path) if user_config_path else None
+        self.chat_client = chat_client
+        self._persona_text = persona_text
+        self._safety_rules = list(safety_rules) if safety_rules is not None else None
+        self._chat_turn_counts: dict[tuple[str, str], int] = {}
+
+    # --- v0.13.0 shell 支撑 -------------------------------------------------
+
+    @property
+    def persona_text(self) -> str:
+        if self._persona_text is None:
+            self._persona_text = self._load_persona_text()
+        return self._persona_text
+
+    @property
+    def safety_rules(self) -> list[str]:
+        if self._safety_rules is None:
+            rules = self.user_config.get("safety_rules")
+            self._safety_rules = [str(r) for r in rules] if isinstance(rules, list) else []
+        return self._safety_rules
+
+    def _load_persona_text(self) -> str:
+        cfg = self.user_config
+        config_dir = self.user_config_path.parent if self.user_config_path else None
+        raw_file = str(cfg.get("persona_file", "") or "").strip()
+        if raw_file:
+            path = _resolve_config_path(raw_file, config_dir)
+            if path is not None:
+                try:
+                    return _strip_persona_markdown(path.read_text(encoding="utf-8"))
+                except OSError:
+                    pass
+        inline = str(cfg.get("persona_text", "") or "").strip()
+        if inline:
+            return inline[:500]
+        return ""
+
+    def _preview_brain(self, peer_id: str) -> ExtraBrain:
+        """只读实例：inject_preview 调 build_injection 时绝不触发激活/加固写入。"""
+        with self._lock:
+            brain = self._preview_brains.get(peer_id)
+            if brain is None:
+                self.data_dir.mkdir(parents=True, exist_ok=True)
+                brain = ExtraBrain(
+                    self.data_dir / f"{peer_id}.db",
+                    extractor=self.extractor,
+                    config=self.config,
+                    read_only=True,
+                    encryption_passphrase=self.encryption_passphrase,
+                    companion_db=self.companion_db,
+                )
+                self._preview_brains[peer_id] = brain
+            return brain
+
+    def shell_health(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "version": __version__,
+            "peer_id": self.shell.peer_id,
+            "read_write": bool(self.extractor is not None and not self.read_only),
+            "data_dir": str(self.data_dir.resolve()),
+        }
+
+    def check_shell_auth(self, headers: Mapping[str, str] | None) -> None:
+        if not self.shell.enabled:
+            raise _HttpError(HTTPStatus.NOT_FOUND, "shell disabled")
+        token = self.shell.token
+        if not token:
+            return  # 开发模式未设 token：仅绑定 127.0.0.1 时可用，文档已注明风险
+        auth = ""
+        x_token = ""
+        if headers is not None:
+            auth = str(headers.get("Authorization", "") or "")
+            x_token = str(headers.get("X-Shell-Token", "") or "")
+        if auth.startswith("Bearer ") and secrets.compare_digest(auth[7:].strip(), token):
+            return
+        if x_token and secrets.compare_digest(x_token, token):
+            return
+        raise _HttpError(HTTPStatus.UNAUTHORIZED, "invalid or missing shell token")
 
     @classmethod
     def from_env(
@@ -101,10 +296,19 @@ class ExtraBrainServer:
         with self._lock:
             return len(self._brains)
 
-    def handle(self, method: str, path: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    def handle(
+        self,
+        method: str,
+        path: str,
+        body: Mapping[str, Any],
+        headers: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
         parsed = urlparse(path)
         query = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
         route = parsed.path.rstrip("/") or "/"
+
+        if route.startswith("/v1"):
+            return self._handle_v1(method, route, query, body, headers)
 
         if method == "GET" and route == "/health":
             return {"ok": True, "peers": self.peer_count}
@@ -189,6 +393,219 @@ class ExtraBrainServer:
             return self._brain(_peer(body)).batch_decay()
 
         raise _HttpError(HTTPStatus.NOT_FOUND, f"unknown route {method} {route}")
+
+    # --- v0.13.0 shell /v1 路由 ---------------------------------------------
+
+    def _handle_v1(
+        self,
+        method: str,
+        route: str,
+        query: Mapping[str, str],
+        body: Mapping[str, Any],
+        headers: Mapping[str, str] | None,
+    ) -> dict[str, Any]:
+        if route == "/v1/health" and method == "GET":
+            if not self.shell.enabled:
+                raise _HttpError(HTTPStatus.NOT_FOUND, "shell disabled")
+            return self.shell_health()
+
+        self.check_shell_auth(headers)
+
+        if method == "GET" and route == "/v1/inject_preview":
+            recent_raw = query.get("recent_context")
+            recent = [recent_raw] if recent_raw else []
+            return self._v1_inject_preview(
+                self._shell_peer_of(query), query.get("q", ""), recent
+            )
+
+        if method == "POST" and route == "/v1/inject_preview":
+            return self._v1_inject_preview(
+                self._shell_peer(body),
+                _string(body.get("query", body.get("q")), "query"),
+                _string_list(body.get("recent_context"), "recent_context"),
+            )
+
+        if method == "POST" and route == "/v1/consolidate":
+            return self._v1_consolidate(body)
+
+        if method == "POST" and route == "/v1/chat":
+            return self._v1_chat(body)
+
+        if method == "GET" and route == "/v1/core":
+            return self._brain(self._shell_peer_of(query, body)).core.to_dict()
+
+        if method == "GET" and route == "/v1/stats":
+            return self._brain(self._shell_peer_of(query, body)).storage_stats()
+
+        raise _HttpError(HTTPStatus.NOT_FOUND, f"unknown route {method} {route}")
+
+    def _shell_peer(self, body: Mapping[str, Any]) -> str:
+        raw = body.get("peer_id")
+        if raw is None or str(raw).strip() == "":
+            return self.shell.peer_id
+        return _string(raw, "peer_id")
+
+    def _shell_peer_of(
+        self, query: Mapping[str, str], body: Mapping[str, Any] | None = None
+    ) -> str:
+        raw = query.get("peer_id")
+        if raw and raw.strip():
+            return raw.strip()
+        if body:
+            return self._shell_peer(body)
+        return self.shell.peer_id
+
+    def _v1_inject_preview(
+        self, peer_id: str, query_text: str, recent: list[str]
+    ) -> dict[str, Any]:
+        if not query_text.strip():
+            raise _HttpError(HTTPStatus.BAD_REQUEST, "query must be a non-empty string")
+        with self._lock:
+            # 只读 brain：build_injection 内部的激活/加固写入被 read_only 跳过
+            injection = self._preview_brain(peer_id).build_injection(
+                query_text, recent_context=recent
+            )
+        return {
+            "peer_id": peer_id,
+            "text": injection.context,
+            "token_estimate": injection.estimated_tokens,
+            "meta": {"memory_ids": injection.retrieved.memory_ids},
+        }
+
+    def _v1_consolidate(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        if self.extractor is None or self.read_only:
+            raise _HttpError(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "read-only mode: no extractor configured (DEEPSEEK_API_KEY not set)",
+            )
+        peer_id = self._shell_peer(body)
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise _HttpError(HTTPStatus.BAD_REQUEST, "messages must be a non-empty array")
+        normalized: list[Mapping[str, str]] = [
+            {
+                "role": _string(item["role"], "messages[].role"),
+                "content": _string(item["content"], "messages[].content"),
+            }
+            for item in messages
+        ]
+        session_id = body.get("session_id")
+        if session_id is not None:
+            session_id = _string(session_id, "session_id")
+        now = _parse_now(body.get("now"))
+        with self._lock:
+            report = self._brain(peer_id).consolidate(
+                normalized, session_id=session_id, now=now
+            )
+        result = report.to_dict()
+        result["peer_id"] = peer_id
+        return result
+
+    def _resolve_chat_client(self) -> Any:
+        client = self.chat_client
+        if client is None and isinstance(self.extractor, OpenAICompatibleExtractor):
+            client = self.extractor
+        if client is None:
+            raise _HttpError(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "chat unavailable: no LLM client configured (DEEPSEEK_API_KEY not set)",
+            )
+        return client
+
+    def _v1_chat(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        client = self._resolve_chat_client()
+        peer_id = self._shell_peer(body)
+        message = _string(body.get("message"), "message")
+        history = self._normalize_history(body.get("history"))
+        session_id = body.get("session_id")
+        session_id = (
+            _string(session_id, "session_id")
+            if session_id
+            else datetime.now().strftime("shell-%Y%m%d-%H%M%S")
+        )
+        auto_inject = bool(body.get("auto_inject", True))
+        model = body.get("model")
+        if model is not None and not isinstance(model, str):
+            raise _HttpError(HTTPStatus.BAD_REQUEST, "model must be a string or null")
+
+        system_parts: list[str] = []
+        persona = self.persona_text
+        if persona:
+            system_parts.append(persona)
+        injected = False
+        inject_tokens = 0
+        if auto_inject:
+            recent = [f"{m['role']}: {m['content']}" for m in history[-5:]]
+            with self._lock:
+                injection = self._preview_brain(peer_id).build_injection(
+                    message, recent_context=recent
+                )
+            system_parts.append(injection.context)
+            inject_tokens = injection.estimated_tokens
+            injected = True
+        if self.safety_rules:
+            system_parts.append(
+                "【安全规范（对用户不可见，直接遵守）】\n"
+                + "\n".join(f"- {rule}" for rule in self.safety_rules)
+            )
+
+        llm_messages: list[Mapping[str, str]] = []
+        if system_parts:
+            llm_messages.append({"role": "system", "content": "\n\n".join(system_parts)})
+        llm_messages.extend(history)
+        llm_messages.append({"role": "user", "content": message})
+
+        try:
+            result = client.complete(llm_messages, model=model)
+        except ExtractionError as exc:
+            raise _HttpError(HTTPStatus.BAD_GATEWAY, f"LLM call failed: {exc}") from exc
+        reply = str(result.get("content", ""))
+        usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+
+        response: dict[str, Any] = {
+            "reply": reply,
+            "session_id": session_id,
+            "injected": injected,
+            "inject_token_estimate": inject_tokens,
+            "usage": usage,
+            "peer_id": peer_id,
+        }
+
+        # auto_consolidate_every_n（默认 0 = 关）：每 N 轮自动巩固一次
+        n = self.shell.auto_consolidate_every_n
+        if n and n > 0 and self.extractor is not None and not self.read_only:
+            key = (peer_id, session_id)
+            count = self._chat_turn_counts[key] = self._chat_turn_counts.get(key, 0) + 1
+            if count % n == 0:
+                conversation = list(history) + [
+                    {"role": "user", "content": message},
+                    {"role": "assistant", "content": reply},
+                ]
+                try:
+                    with self._lock:
+                        report = self._brain(peer_id).consolidate(
+                            conversation, session_id=session_id
+                        )
+                    response["auto_consolidate"] = report.to_dict()
+                except Exception as exc:  # 巩固失败不阻塞聊天回复
+                    response["auto_consolidate_error"] = str(exc)
+        return response
+
+    @staticmethod
+    def _normalize_history(value: Any) -> list[Mapping[str, str]]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise _HttpError(HTTPStatus.BAD_REQUEST, "history must be an array")
+        normalized: list[Mapping[str, str]] = []
+        for item in value:
+            if not isinstance(item, Mapping):
+                raise _HttpError(HTTPStatus.BAD_REQUEST, "history items must be objects")
+            role = _string(item.get("role"), "history[].role")
+            if role not in ("user", "assistant"):
+                raise _HttpError(HTTPStatus.BAD_REQUEST, "history[].role must be user|assistant")
+            normalized.append({"role": role, "content": _string(item.get("content"), "history[].content")})
+        return normalized
 
     def _now_of(self, body: Mapping[str, Any]):
         raw = body.get("now")
@@ -355,12 +772,19 @@ class ExtraBrainServer:
             for brain in self._brains.values():
                 brain.close()
             self._brains.clear()
+            for brain in self._preview_brains.values():
+                brain.close()
+            self._preview_brains.clear()
 
 
 class _Handler(BaseHTTPRequestHandler):
     server: "ThreadingHTTPServer"
 
     def do_GET(self) -> None:
+        route = urlparse(self.path).path
+        if route in ("/", "/shell", "/shell/"):
+            self._serve_shell_index()
+            return
         self._dispatch("GET", {})
 
     def do_POST(self) -> None:
@@ -376,9 +800,25 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._dispatch("POST", body)
 
+    def _serve_shell_index(self) -> None:
+        index = _SHELL_STATIC_DIR / "index.html"
+        if not index.is_file():
+            self._respond_bytes(
+                HTTPStatus.NOT_FOUND,
+                "text/html; charset=utf-8",
+                "<h1>shell UI not found</h1><p>missing src/extra_brain/static/shell/index.html</p>".encode("utf-8"),
+            )
+            return
+        try:
+            data = index.read_bytes()
+        except OSError:
+            self._respond_bytes(HTTPStatus.INTERNAL_SERVER_ERROR, "text/plain", b"cannot read shell UI")
+            return
+        self._respond_bytes(HTTPStatus.OK, "text/html; charset=utf-8", data)
+
     def _dispatch(self, method: str, body: Mapping[str, Any]) -> None:
         try:
-            result = self.server.app.handle(method, self.path, body)
+            result = self.server.app.handle(method, self.path, body, headers=self.headers)
         except _HttpError as exc:
             self._respond(exc.status, {"error": exc.message})
         except (MemoryValidationError, ValueError, TypeError, KeyError) as exc:
@@ -394,6 +834,13 @@ class _Handler(BaseHTTPRequestHandler):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _respond_bytes(self, status: HTTPStatus, content_type: str, data: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -445,17 +892,48 @@ def make_server(
     host: str = "127.0.0.1",
     port: int = 8756,
     config: MemoryConfig | None = None,
+    shell: ShellSettings | None = None,
+    user_config: Mapping[str, Any] | None = None,
+    user_config_path: str | Path | None = None,
+    chat_client: Any = None,
 ) -> ThreadingHTTPServer:
-    app = ExtraBrainServer(data_dir, extractor=extractor, config=config)
+    app = ExtraBrainServer(
+        data_dir,
+        extractor=extractor,
+        config=config,
+        shell=shell,
+        user_config=user_config,
+        user_config_path=user_config_path,
+        chat_client=chat_client,
+    )
     server = ThreadingHTTPServer((host, port), _Handler)
     server.app = app  # type: ignore[attr-defined]
     return server
 
 
+def _load_user_config_file(path: str | Path | None) -> tuple[dict[str, Any], Path | None]:
+    """读取 user_config.json（人设/安全规范/shell 配置）。不存在返回空 dict。"""
+    candidates: list[Path] = []
+    if path:
+        candidates.append(Path(path))
+    env_path = os.environ.get("EXTRA_BRAIN_USER_CONFIG")
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(Path("config/user_config.json"))
+    for candidate in candidates:
+        if candidate.is_file():
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {}, candidate
+            return (data if isinstance(data, dict) else {}), candidate
+    return {}, None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="extra_brain 本地 HTTP sidecar")
+    parser = argparse.ArgumentParser(description="extra_brain 本地 HTTP sidecar + Chat Shell")
     parser.add_argument("--data-dir", default="extra-brain")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="127.0.0.1", help="默认仅本机；安全上禁止默认对外开放")
     parser.add_argument("--port", type=int, default=8756)
     parser.add_argument(
         "--read-only",
@@ -467,13 +945,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="静态加密口令（v0.5.0）；默认读取 EXTRA_BRAIN_ENCRYPTION_PASSPHRASE 环境变量",
     )
+    parser.add_argument(
+        "--user-config",
+        default=None,
+        help="user_config.json 路径（人设/安全规范/shell 配置）；默认自动查找 config/user_config.json",
+    )
+    parser.add_argument(
+        "--no-shell",
+        action="store_true",
+        help="关闭 v0.13.0 /v1 shell API（仅保留旧 sidecar 端点）",
+    )
     args = parser.parse_args(argv)
+
+    user_config, config_path = _load_user_config_file(args.user_config)
+    shell = ShellSettings(
+        enabled=(False if args.no_shell else None),
+        user_config=user_config,
+    )
+    if shell.enabled and not shell.token:
+        shell.token = secrets.token_hex(16)
+        print(f"shell token (generated, save it): {shell.token}")
 
     app = ExtraBrainServer(
         args.data_dir,
         extractor=None if args.read_only else _default_extractor(),
         read_only=args.read_only,
         encryption_passphrase=args.encryption_passphrase,
+        shell=shell,
+        user_config=user_config,
+        user_config_path=config_path,
     )
     server = ThreadingHTTPServer((args.host, args.port), _Handler)
     server.app = app  # type: ignore[attr-defined]
@@ -484,7 +984,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if app.extractor is not None
         else "read-only (no DEEPSEEK_API_KEY)"
     )
-    print(f"extra_brain sidecar listening on http://{args.host}:{args.port} [{mode}]")
+    shell_state = (
+        f"shell on (peer {shell.peer_id}, {'token set' if shell.token else 'NO token'})"
+        if shell.enabled
+        else "shell off"
+    )
+    print(f"extra_brain sidecar listening on http://{args.host}:{args.port} [{mode}] [{shell_state}]")
+    if shell.enabled:
+        print(f"chat shell UI: http://{args.host}:{args.port}/shell/")
     print(f"data dir: {Path(args.data_dir).resolve()}")
     try:
         server.serve_forever()

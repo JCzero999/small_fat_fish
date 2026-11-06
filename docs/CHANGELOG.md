@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-11-06 — v0.13.0 主场迁移：独立 Chat Shell + Agent API ✅
+
+> 按《小豚 v0.13.0 迭代文档》执行（方案 A：扩展现有 sidecar，禁止前端另建记忆逻辑）。
+
+### T0 契约文档与配置 ✅
+- ✅ 新增 `docs/PRODUCT_NORTH.md`（产品北极星：主场定义/三步打开方式/五条第一性原理/非目标）
+- ✅ 新增 `docs/SHELL_API.md`（/v1 全端点请求响应示例、鉴权与绑定契约、与旧 sidecar 端点关系）
+- ✅ `user_config.json(.template)` 新增 `shell` 块：`shell_enabled`（默认 true）/ `shell_peer_id`（默认 `local-main`）/ `shell_token`（空则启动时随机生成并打印一次）/ `auto_consolidate_every_n`（默认 0）；环境变量 `SHELL_TOKEN` / `SHELL_PEER_ID` / `SHELL_ENABLED` 同名覆盖
+
+### T1–T4 /v1 API（全部落地） ✅
+- ✅ `GET /v1/health`（免鉴权）：ok/version/peer_id/read_write/data_dir
+- ✅ `GET|POST /v1/inject_preview`：**只读 brain 实例**调 `build_injection`，激活/加固写入被 read_only 跳过，实测 stats 前后一致（不写库）
+- ✅ `POST /v1/consolidate`：写目标 peer db，报告与内核对齐；无 Key 503
+- ✅ `POST /v1/chat`：system = 人设正文（persona_file 同源解析）+ 注入文本 + 安全规范 → 调现有 LLM 客户端；`auto_inject` 可关；`auto_consolidate_every_n` 默认关；LLM 不可达 502 / 无客户端 503
+- ✅ `GET /v1/core` / `GET /v1/stats` 调试只读；**鉴权**：`Authorization: Bearer` 或 `X-Shell-Token`，错误 401（secrets.compare_digest 防时序）；旧 sidecar 端点不受影响（AstrBot http 后端兼容）；`--no-shell` 可整体关闭
+- ✅ `OpenAICompatibleExtractor.complete()`：通用聊天补全，与抽取共用同一套 api 配置（user_config.api → 环境变量）
+
+### T5 Web UI ✅
+- ✅ `src/extra_brain/static/shell/index.html` 挂载在 `/` 与 `/shell/`：消息气泡、发送（/v1/chat）、「预览注入」（/v1/inject_preview 侧栏显示）、「记住以上对话」（/v1/consolidate + Toast）、health 连接状态、token 输入存 localStorage、新会话按钮；单文件零依赖
+
+### T6 回归脚本 ✅
+- ✅ `scripts/shell_regression.py`：health → chat（记住面试）→ 闲聊×2 → consolidate → 新 session 召回 → 关键词断言；无 Key SKIP 退出 0；**真实 DeepSeek 全绿**（巩固 semantic=2/episodic=1，新会话答出「记得。下周三，相亲面试，你说会紧张。」）
+
+### T7 人设 ✅
+- ✅ 复用 v0.12.1 `persona/xiaotun_v1.md`（chat 拼 system 时经 `_strip_persona_markdown` 同规则注入；缺失回退 persona_text → 无）
+
+### T8/T9 测试与版本 ✅
+- ✅ 新增 `tests/test_v13_features.py` 22 项（鉴权 401/双头/免 health、inject_preview 不写库、consolidate 写库与 503、chat system 组装/history/auto_inject/503、shell 关闭 404、静态页、handle 向后兼容、peer 回退）；全量 **276 项绿**（254 原有零修改 + 22 新增，2 skipped）
+- ✅ 版本号 `0.13.0`（`__init__.py` + `pyproject.toml`）；README/HANDOVER 同步主场说明
+
+---
+
 ## 2026-11-05 — v0.12.1 表达与人设层（小豚「像小豚」） ✅
 
 > 按《小豚「表达与人设层」迭代方案V0.12.1.md》执行，插在方案 C 之前；纯体验与配置层，不动记忆内核断言。

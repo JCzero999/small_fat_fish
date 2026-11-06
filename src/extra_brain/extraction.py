@@ -473,6 +473,54 @@ class OpenAICompatibleExtractor:
             raise ExtractionError("extractor returned an invalid JSON response") from exc
         return ExtractionResult.from_dict(parsed)
 
+    def complete(
+        self,
+        messages: Sequence[Mapping[str, str]],
+        *,
+        model: str | None = None,
+        temperature: float = 0.8,
+        max_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """v0.13.0 shell：通用聊天补全（/v1/chat 用），与抽取共用同一套 API 配置。
+
+        返回 ``{"content": str, "usage": dict}``；失败抛 ``ExtractionError``。
+        """
+        payload: dict[str, Any] = {
+            "model": model or self.model,
+            "messages": [
+                {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+                for m in messages
+            ],
+            "temperature": temperature,
+            "stream": False,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = int(max_tokens)
+        request = Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            content = body["choices"][0]["message"]["content"]
+            if not isinstance(content, str):
+                raise ExtractionError("chat response content is not a string")
+        except HTTPError as exc:
+            raise ExtractionError(f"chat HTTP request failed with status {exc.code}") from exc
+        except (URLError, TimeoutError) as exc:
+            raise ExtractionError(f"chat request failed: {exc}") from exc
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise ExtractionError("chat returned an invalid JSON response") from exc
+        usage = body.get("usage")
+        return {"content": content, "usage": usage if isinstance(usage, dict) else {}}
+
 
 def build_extraction_prompt(conversation: str, existing_memories: Sequence[Mapping[str, Any]]) -> str:
     conversation = _string(conversation, "conversation")

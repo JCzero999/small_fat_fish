@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小豚 · Chat Shell</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --ink: #1f2329; --muted: #6b7280;
+    --accent: #4f6ef2; --accent-ink: #ffffff; --border: #e3e6ea;
+    --user-bubble: #4f6ef2; --user-ink: #ffffff; --ok: #16a34a; --err: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--ink); height: 100vh; display: flex; }
+  /* 左侧主聊天区 */
+  main { flex: 1; display: flex; flex-direction: column; max-width: 860px; margin: 0 auto; width: 100%; }
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+           background: var(--panel); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  #status { font-size: 12px; color: var(--muted); }
+  #status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                 background: var(--err); margin-right: 4px; vertical-align: 1px; }
+  #status.ok .dot { background: var(--ok); }
+  header .spacer { flex: 1; }
+  header button { font-size: 12px; }
+  #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 72%; padding: 9px 13px; border-radius: 12px; line-height: 1.55;
+         font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--user-bubble); color: var(--user-ink);
+              border-bottom-right-radius: 4px; }
+  .msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--border);
+                   border-bottom-left-radius: 4px; }
+  .msg.system-note { align-self: center; background: transparent; color: var(--muted); font-size: 12px; }
+  .msg.error { align-self: center; background: #fef2f2; color: var(--err); font-size: 12px;
+               border: 1px solid #fecaca; }
+  footer { display: flex; gap: 8px; padding: 12px 16px; background: var(--panel);
+           border-top: 1px solid var(--border); }
+  #input { flex: 1; resize: none; border: 1px solid var(--border); border-radius: 10px;
+           padding: 10px 12px; font-size: 14px; font-family: inherit; height: 46px;
+           max-height: 120px; outline: none; }
+  #input:focus { border-color: var(--accent); }
+  button { border: 1px solid var(--border); background: var(--panel); color: var(--ink);
+           border-radius: 10px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  /* 右侧记忆面板 */
+  aside { width: 320px; background: var(--panel); border-left: 1px solid var(--border);
+          display: flex; flex-direction: column; }
+  aside .panel-head { padding: 12px 14px; border-bottom: 1px solid var(--border);
+                      display: flex; align-items: center; gap: 8px; }
+  aside .panel-head h2 { font-size: 13px; margin: 0; font-weight: 600; }
+  aside .panel-body { flex: 1; overflow-y: auto; padding: 12px 14px; font-size: 12.5px;
+                      color: var(--ink); line-height: 1.6; white-space: pre-wrap;
+                      word-break: break-word; }
+  aside .panel-body .placeholder { color: var(--muted); }
+  aside .panel-foot { padding: 10px 14px; border-top: 1px solid var(--border); }
+  /* Token 弹层 */
+  #token-mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex;
+                align-items: center; justify-content: center; z-index: 10; }
+  #token-mask.hidden { display: none; }
+  #token-card { background: var(--panel); border-radius: 12px; padding: 20px; width: 340px; }
+  #token-card h3 { margin: 0 0 6px; font-size: 14px; }
+  #token-card p { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+  #token-card input { width: 100%; padding: 8px 10px; border: 1px solid var(--border);
+                      border-radius: 8px; font-size: 13px; margin-bottom: 10px; }
+  #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+           background: var(--ink); color: #fff; font-size: 13px; padding: 8px 16px;
+           border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 20; }
+  #toast.show { opacity: .92; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>小豚 · Chat Shell</h1>
+    <span id="status"><span class="dot"></span>连接中…</span>
+    <span class="spacer"></span>
+    <button id="btn-token" title="设置 Shell Token">Token</button>
+    <button id="btn-new" title="结束当前会话">新会话</button>
+  </header>
+  <div id="messages"></div>
+  <footer>
+    <button id="btn-preview" title="查看这句会注入哪些记忆">预览注入</button>
+    <textarea id="input" placeholder="和小豚说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button id="btn-send" class="primary">发送</button>
+    <button id="btn-remember" title="把本段对话写入长期记忆">记住以上对话</button>
+  </footer>
+</main>
+<aside>
+  <div class="panel-head"><h2>将注入的记忆</h2>
+    <span class="spacer" style="flex:1"></span>
+    <span id="inject-meta" style="font-size:11px;color:var(--muted)"></span>
+  </div>
+  <div class="panel-body"><span class="placeholder">输入一句话后点「预览注入」，这里显示本次将注入小豚上下文的长期记忆原文（只读，不写库）。</span></div>
+  <div class="panel-foot">
+    <button id="btn-remember-2" style="width:100%">记住以上对话</button>
+  </div>
+</aside>
+
+<div id="token-mask" class="hidden">
+  <div id="token-card">
+    <h3>Shell Token</h3>
+    <p>本机服务的访问令牌（启动服务时打印，或见 SHELL_TOKEN / user_config.json）。只存浏览器 localStorage。</p>
+    <input id="token-input" placeholder="粘贴 token…">
+    <button id="btn-token-save" class="primary" style="width:100%">保存</button>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+  var TOKEN_KEY = "shell_token";
+  var $ = function (id) { return document.getElementById(id); };
+  var messages = $("messages"), input = $("input"), sendBtn = $("btn-send");
+  var history = [];      // [{role, content}]
+  var sessionId = newSessionId();
+  var busy = false;
+
+  function newSessionId() {
+    var d = new Date();
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return "shell-" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
+           "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+  }
+  function token() { return localStorage.getItem(TOKEN_KEY) || ""; }
+  function authHeaders(extra) {
+    var h = extra || {};
+    if (token()) { h["Authorization"] = "Bearer " + token(); }
+    return h;
+  }
+  function toast(text, isErr) {
+    var t = $("toast");
+    t.textContent = text;
+    t.style.background = isErr ? "var(--err)" : "";
+    t.classList.add("show");
+    setTimeout(function () { t.classList.remove("show"); }, 2200);
+  }
+  function addBubble(kind, text) {
+    var div = document.createElement("div");
+    div.className = "msg " + kind;
+    div.textContent = text;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+    return div;
+  }
+
+  // --- health ---
+  function checkHealth() {
+    fetch("/v1/health").then(function (r) { return r.json(); }).then(function (b) {
+      var el = $("status");
+      if (b.ok) {
+        el.className = "ok";
+        el.innerHTML = '<span class="dot"></span>' + (b.read_write ? "已连接 · 可巩固" : "已连接 · 只读(无Key)");
+        el.title = "peer: " + b.peer_id + " · v" + b.version;
+      } else { el.className = ""; el.innerHTML = '<span class="dot"></span>异常'; }
+    }).catch(function () {
+      $("status").className = "";
+      $("status").innerHTML = '<span class="dot"></span>无法连接服务';
+    });
+  }
+
+  // --- chat ---
+  function send() {
+    var text = input.value.trim();
+    if (!text || busy) return;
+    if (!token()) { showTokenMask(); toast("请先设置 Shell Token", true); return; }
+    busy = true; sendBtn.disabled = true;
+    input.value = "";
+    addBubble("user", text);
+    var body = {
+      peer_id: "local-main",
+      session_id: sessionId,
+      message: text,
+      history: history,
+      auto_inject: true
+    };
+    fetch("/v1/chat", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().then(function (b) { return { status: r.status, body: b }; });
+    }).then(function (res) {
+      if (res.status !== 200) {
+        addBubble("error", "请求失败 (" + res.status + "): " + (res.body.error || "未知错误"));
+        if (res.status === 401) { showTokenMask(); }
+        return;
+      }
+      addBubble("assistant", res.body.reply || "（空回复）");
+      history.push({ role: "user", content: text });
+      history.push({ role: "assistant", content: res.body.reply || "" });
+    }).catch(function (e) {
+      addBubble("error", "网络错误: " + e);
+    }).finally(function () {
+      busy = false; sendBtn.disabled = false; input.focus();
+    });
+  }
+
+  // --- inject preview ---
+  function preview() {
+    var q = input.value.trim() || (history.length ? history[history.length - 1].content : "");
+    if (!q) { toast("先输入一句话再预览", true); return; }
+    if (!token()) { showTokenMask(); return; }
+    fetch("/v1/inject_preview?q=" + encodeURIComponent(q) + "&peer_id=local-main", {
+      headers: authHeaders()
+    }).then(function (r) { return r.json().then(function (b) { return { status: r.status, body: b }; }); })
+      .then(function (res) {
+        var panel = document.querySelector("aside .panel-body");
+        if (res.status !== 200) {
+          panel.textContent = "预览失败 (" + res.status + "): " + (res.body.error || "");
+          return;
+        }
+        panel.textContent = res.body.text || "（无记忆注入）";
+        $("inject-meta").textContent = "~" + res.body.token_estimate + " tokens";
+      }).catch(function (e) { toast("网络错误: " + e, true); });
+  }
+
+  // --- consolidate ---
+  function remember() {
+    if (busy) return;
+    if (!history.length) { toast("当前会话还没有对话内容", true); return; }
+    if (!token()) { showTokenMask(); return; }
+    busy = true;
+    fetch("/v1/consolidate", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ peer_id: "local-main", session_id: sessionId, messages: history })
+    }).then(function (r) { return r.json().then(function (b) { return { status: r.status, body: b }; }); })
+      .then(function (res) {
+        if (res.status !== 200) {
+          addBubble("error", "巩固失败 (" + res.status + "): " + (res.body.error || ""));
+          if (res.status === 401) { showTokenMask(); }
+          return;
+        }
+        var n = (res.body.semantic_written || 0) + (res.body.episodic_written || 0);
+        addBubble("system-note", "已记住本段对话：新增语义 " + (res.body.semantic_written || 0) +
+          " 条、情节 " + (res.body.episodic_written || 0) + " 条" +
+          (res.body.conflicts ? ("，检出改口 " + res.body.conflicts.length + " 处") : "") +
+          "。开新会话后小豚就「记得」了。");
+        toast("已写入长期记忆 ✔");
+      }).catch(function (e) { toast("网络错误: " + e, true); })
+      .finally(function () { busy = false; });
+  }
+
+  // --- token mask ---
+  function showTokenMask() {
+    $("token-input").value = token();
+    $("token-mask").classList.remove("hidden");
+    $("token-input").focus();
+  }
+  $("btn-token").onclick = showTokenMask;
+  $("btn-token-save").onclick = function () {
+    var v = $("token-input").value.trim();
+    if (!v) { toast("token 不能为空", true); return; }
+    localStorage.setItem(TOKEN_KEY, v);
+    $("token-mask").classList.add("hidden");
+    toast("Token 已保存");
+  };
+  $("token-input").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { $("btn-token-save").click(); }
+  });
+
+  // --- events ---
+  sendBtn.onclick = send;
+  $("btn-preview").onclick = preview;
+  $("btn-remember").onclick = remember;
+  $("btn-remember-2").onclick = remember;
+  $("btn-new").onclick = function () {
+    if (history.length) { addBubble("system-note", "—— 会话已结束（" + sessionId + "）。建议先「记住以上对话」再开始新会话。——"); }
+    history = [];
+    sessionId = newSessionId();
+    document.querySelector("aside .panel-body").innerHTML =
+      '<span class="placeholder">输入一句话后点「预览注入」…</span>';
+    $("inject-meta").textContent = "";
+  };
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+
+  checkHealth();
+  if (!token()) { showTokenMask(); }
+})();
+</script>
+</body>
+</html>
