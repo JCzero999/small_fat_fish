@@ -4,7 +4,8 @@
 
 - **鉴权**：除 `GET /v1/health` 外，所有 `/v1/*` 端点需要 `Authorization: Bearer <token>`
   或 `X-Shell-Token: <token>` 请求头；token 来源优先级：`SHELL_TOKEN` 环境变量 >
-  `user_config.json` 的 `shell.shell_token` > 启动时随机生成并打印一次。
+  `user_config.json` 的 `shell.shell_token` > 启动时随机生成。**启动日志始终打印当前 token 值**
+  （`[shell on (peer …, token …)]`，仅输出到控制台），网页首次打开把它粘贴进 Token 弹窗即可（存 localStorage，只需一次）。
   token 错误/缺失 → `401 {"error": "invalid or missing shell token"}`。
 - **绑定**：默认 `127.0.0.1`（配置强制），请勿对公网开放。
 - **默认 peer**：`local-main`（可用 `SHELL_PEER_ID` / `shell.shell_peer_id` 改）；请求体可传
