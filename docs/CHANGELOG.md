@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-11-07 — v0.13.1 记忆互通 + 数据架构统一 ✅
+
+### Shell ↔ QQ 记忆互通（修复「网页里她不认识我」）
+- ✅ 根因：Shell 默认 peer `local-main` 与 QQ peer 隔离 + **server.py peer db 文件名直接用 peer_id**（含 `:` Windows 非法），与插件编码不一致
+- ✅ `server.py` 新增 `_filename_for_peer()`（与 AstrBot 插件 main.py 一字不差）：`qq:FriendMessage:1975824324` → `qq_FriendMessage_1975824324-e46c8efb.db`
+- ✅ 全局伴侣库默认名对齐插件：`_global.db` → `_global_companion.db`，人设跨端一致
+- ✅ 本机配置 `shell.shell_peer_id` → `qq:FriendMessage:1975824324`；真库只读验证互通（QQ 侧记忆全召回，注入 1709 tokens）
+- ✅ README/SHELL_API 写明互通两个条件：同一 data-dir + 同 peer_id
+
+### 数据架构统一：仓库 `extra-brain/` 为唯一真相源
+- ✅ 理念拍板：宿主只是挂载点（QQ / Web Shell / 未来抖音等），数据集中在 `D:\projects\small_fat_fish\extra-brain\`（.gitignore 不入 git），靠 peer_id 隔离各端各人
+- ✅ 迁移：停服 → 复制全部 `.db`+WAL/SHM → `integrity_check` ok + 行数逐一对比一致；**原目录 `astrbot-runtime\data\extra_brain\` 完整保留作备份**
+- ✅ AstrBot 插件配置 `data_dir` / `companion_db` 改指仓库目录；`status-all.ps1` 同步
+- ✅ README（数据架构说明）/ HANDOVER（坑 0）/ MEMORY_ITERATION_PLAN（数据即资产）更新；276 项测试全绿
+
+---
+
 ## 2026-11-06 — v0.13.0 主场迁移：独立 Chat Shell + Agent API ✅
 
 > 按《小豚 v0.13.0 迭代文档》执行（方案 A：扩展现有 sidecar，禁止前端另建记忆逻辑）。

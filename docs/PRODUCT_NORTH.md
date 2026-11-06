@@ -15,7 +15,7 @@
 
 ## 打开方式（新贡献者三步）
 
-1. 启动：`python -m extra_brain.server --data-dir extra-brain`（默认 127.0.0.1:8756）
+1. 启动：在仓库根 `python -m extra_brain.server --data-dir extra-brain`（默认 127.0.0.1:8756；仓库 `extra-brain/` 即唯一数据源）
 2. 浏览器打开 `http://127.0.0.1:8756/shell/`，粘贴 shell token（启动时打印或见 `config/user_config.json`）
 3. 聊几句 → 点「记住以上对话」→ 开新会话 → 小豚记得你
 
@@ -26,11 +26,11 @@
 
 ## 第一性原理（任何迭代不得违反）
 
-1. **记忆唯一真相源** = 现有 `extra_brain` SQLite（按 peer）；禁止在前端另存对话当长期记忆。
+1. **记忆唯一真相源** = 现有 `extra_brain` SQLite（按 peer），**物理位置统一在仓库 `extra-brain/`**（2026-11-07 起）；禁止在前端另存对话当长期记忆。
 2. **主场** = Web Shell + API；QQ 可继续跑，但文档与默认引导指向壳。
 3. **人机同权** = UI 能做的巩固/注入预览，API 必须能做。
 4. **默认本机** = 服务只绑 `127.0.0.1`；带本地 token；禁止默认 `0.0.0.0`。
-5. **零强制迁移** = 旧 QQ peer 库不动；主壳使用独立默认 `peer_id`（`local-main`）。
+5. **零强制迁移 = 宿主只是挂载点**：QQ / Web Shell / 未来抖音等一切宿主的 `data_dir` 都指向仓库 `extra-brain/`，靠 `peer_id` 隔离各端各人；默认 peer `local-main`（独立主场），设 `shell_peer_id` 为 QQ 私聊 peer 即与 QQ 记忆互通（v0.13.1 已实现并真库验证）。
 
 ## 非目标（不得自行扩大）
 

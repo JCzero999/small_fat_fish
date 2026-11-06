@@ -1,7 +1,7 @@
 # 交接文档（Handover）
 
 > 给接手本仓库的人：这份文档说明「现在做到哪了、怎么跑起来、有哪些坑、下一步干什么」。
-> 最后更新：2026-11-06（v0.13.0 主场迁移：独立 Chat Shell + Agent API——`/v1/chat|consolidate|inject_preview|health` + Bearer 鉴权 + 最小 Web UI（`/shell/`）+ `scripts/shell_regression.py` 真实 LLM 回归全绿；默认 peer `local-main`，旧 QQ peer 零迁移。276 项测试全绿。此前 v0.12.1 表达与人设层（A/B 真实验收与 H1–H6 人工验收仍在进行）；下一期 v0.14.0 方案 C 自主记账。主场契约见 `PRODUCT_NORTH.md` / `SHELL_API.md`）。
+> 最后更新：2026-11-07（v0.13.1 记忆互通 + 数据架构统一：server peer db 文件名与插件对齐（`_filename_for_peer`）、companion 库对齐 `_global_companion.db`、本机 shell_peer_id 指向 QQ 私聊 peer 实现跨端记忆互通；**记忆数据统一迁至仓库 `extra-brain/`**，AstrBot 插件与 Shell 同挂此目录，宿主只是挂载点。此前 v0.13.0 主场迁移：独立 Chat Shell + Agent API——`/v1/chat|consolidate|inject_preview|health` + Bearer 鉴权 + 最小 Web UI（`/shell/`）+ `scripts/shell_regression.py` 真实 LLM 回归全绿。276 项测试全绿。此前 v0.12.1 表达与人设层（A/B 真实验收与 H1–H6 人工验收仍在进行）；下一期 v0.14.0 方案 C 自主记账。主场契约见 `PRODUCT_NORTH.md` / `SHELL_API.md`）。
 
 ---
 
@@ -35,7 +35,7 @@
 
 | 部分 | 状态 |
 |------|------|
-| Python 记忆库 | ✅ **v0.13.0**：主场迁移——**独立 Chat Shell（`/shell/` Web UI）+ Agent HTTP API（`/v1/chat|consolidate|inject_preview|health|core|stats`，Bearer token 鉴权，默认 peer `local-main`）**；此前累计 v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子 + v0.11.0 方案 A 生活感 + v0.12.0 方案 B FSRS 牢固度 + v0.12.1 表达与人设层。**276 项单测全绿**（254 原有零修改 + 22 新增，2 skipped），真实 DeepSeek 无 GUI 回归（`scripts/shell_regression.py`）通过 |
+| Python 记忆库 | ✅ **v0.13.1**：**记忆互通 + 数据架构统一——peer db 文件名与插件对齐（`_filename_for_peer`）、companion 库对齐 `_global_companion.db`、shell_peer_id 指向 QQ 私聊 peer 跨端互通；记忆数据统一在仓库 `extra-brain/`，宿主只是挂载点**。主场迁移——**独立 Chat Shell（`/shell/` Web UI）+ Agent HTTP API（`/v1/chat|consolidate|inject_preview|health|core|stats`，Bearer token 鉴权，默认 peer `local-main`）**；此前累计 v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子 + v0.11.0 方案 A 生活感 + v0.12.0 方案 B FSRS 牢固度 + v0.12.1 表达与人设层。**276 项单测全绿**（254 原有零修改 + 22 新增，2 skipped），真实 DeepSeek 无 GUI 回归（`scripts/shell_regression.py`）通过 |
 | **Chat Shell（主场）** | ✅ **v0.13.0 已落地**：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`；token 见 `SHELL_TOKEN` env 或 `config/user_config.json` 的 `shell.shell_token`（本机已设 `xtn-shell-local-1a2b3c4d`）；契约见 `docs/SHELL_API.md`；北极星见 `docs/PRODUCT_NORTH.md` |
 | sidecar（HTTP 服务） | ✅ 已落地并扩展：旧端点（`/inject` `/consolidate` `/stats` `/forget` `/shadow` `/freeze` `/decay` 等）保持不变（AstrBot http 后端兼容）；v0.13.0 新增 `/v1/*` 与静态 UI，`--no-shell` 可关闭 |
 | CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 254 项单测 + CLI 冒烟 |
@@ -46,7 +46,7 @@
 | DSH 适配器 | ⛔ 插件模块加载失败（根因已定位见坑 4，**已被 AstrBot 路线取代，暂搁置**） |
 | 定时/消息阈值自动巩固 | ✅ 阈值触发已实现（AstrBot 适配器内）；**主动开口循环已上线运行**（proactive_enabled=true，20 分钟/30%概率/每日≤5/22–8 免打扰） |
 
-**一句话**：记忆库 v0.13.0（…v0.12.1 表达与人设层 → **v0.13.0 主场迁移：独立 Chat Shell + /v1 Agent API，默认 peer `local-main`，QQ 降级为挂载点**，276 项测试全绿 + 真实 LLM 回归通过）→ AstrBot → QQ 全链路此前已跑通且不受影响；机器人 QQ 号 `1178469499`（Startup 看门狗托管）；旧数据零迁移兼容、主动开口循环运行中。**不打开 QQ：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`**。
+**一句话**：记忆库 v0.13.1（…v0.12.1 表达与人设层 → v0.13.0 主场迁移：独立 Chat Shell + /v1 Agent API → **v0.13.1 记忆互通（peer 文件名/companion 库对齐插件）+ 数据架构统一（记忆唯一真相源 = 仓库 `extra-brain/`，宿主只是挂载点，QQ/Web Shell/未来抖音同挂一目录靠 peer_id 隔离）**，276 项测试全绿 + 真实 LLM 回归通过）→ AstrBot → QQ 全链路此前已跑通且不受影响；机器人 QQ 号 `1178469499`（Startup 看门狗托管）。**不打开 QQ：在仓库根跑 `python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`（与 QQ 记忆互通）。**
 
 ---
 
@@ -247,7 +247,7 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 - **验证记忆**：暗号三步法见 §5（WebChatUI 与 QQ 两套均已验证）
 - **AstrBot dashboard**：`http://127.0.0.1:6185`（密码见启动横幅/环境变量方式见 §4）
 - **机器人 QQ**：`1178469499`（NapCat WebUI：`http://127.0.0.1:6099/webui`，token 见 NapCat 启动日志）
-- **记忆库数据**：`D:\projects_software\astrbot-runtime\data\extra_brain\`（每 peer 一个 .db；换宿主=拷贝此目录）
+- **记忆库数据**：`D:\projects\small_fat_fish\extra-brain\`（2026-11-07 起唯一真相源；每 peer 一个 .db，文件名经 `_filename_for_peer` 编码；换宿主=新宿主 data_dir 指向此目录。旧位置 `D:\projects_software\astrbot-runtime\data\extra_brain\` 保留作备份）
 - **本地离线体验**（不接宿主）：`extra-brain --db memory.db chat --threshold 8`
 - **挂载新宿主**：读 `docs/MOUNT.md`，约 1 小时
 
