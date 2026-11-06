@@ -56,6 +56,12 @@
                       word-break: break-word; }
   aside .panel-body .placeholder { color: var(--muted); }
   aside .panel-foot { padding: 10px 14px; border-top: 1px solid var(--border); }
+  /* Token 状态徽标 */
+  #token-badge { font-size: 12px; padding: 4px 10px; border-radius: 999px; }
+  #token-badge.unset { color: var(--err); border-color: #fca5a5; background: #fef2f2;
+                       font-weight: 600; animation: pulse 1.6s ease-in-out infinite; }
+  #token-badge.set { color: var(--ok); border-color: #bbf7d0; background: #f0fdf4; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
   /* Token 弹层 */
   #token-mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex;
                 align-items: center; justify-content: center; z-index: 10; }
@@ -76,8 +82,8 @@
   <header>
     <h1>小豚 · Chat Shell</h1>
     <span id="status"><span class="dot"></span>连接中…</span>
+    <button id="token-badge" title="查看 / 设置 Shell Token">Token 未设置</button>
     <span class="spacer"></span>
-    <button id="btn-token" title="设置 Shell Token">Token</button>
     <button id="btn-new" title="结束当前会话">新会话</button>
   </header>
   <div id="messages"></div>
@@ -101,8 +107,8 @@
 
 <div id="token-mask" class="hidden">
   <div id="token-card">
-    <h3>Shell Token</h3>
-    <p>本机服务的访问令牌（启动服务时打印，或见 SHELL_TOKEN / user_config.json）。只存浏览器 localStorage。</p>
+    <h3>Shell Token（必填，只需填一次）</h3>
+    <p>本机服务的访问令牌，用于鉴权，防止本机其他程序访问你的记忆库。填一次后存入浏览器 localStorage，之后不再询问。取值见服务启动日志，或 user_config.json 的 shell.shell_token。</p>
     <input id="token-input" placeholder="粘贴 token…">
     <button id="btn-token-save" class="primary" style="width:100%">保存</button>
   </div>
@@ -118,6 +124,7 @@
   var history = [];      // [{role, content}]
   var sessionId = newSessionId();
   var busy = false;
+  var PEER = null;       // 服务端默认 peer（/v1/health 返回），互通时即 QQ peer
 
   function newSessionId() {
     var d = new Date();
@@ -147,11 +154,26 @@
     return div;
   }
 
+  // --- token badge ---
+  function refreshTokenBadge() {
+    var b = $("token-badge");
+    if (token()) {
+      b.className = "set";
+      b.textContent = "Token 已设置";
+      b.title = "Token 已保存到浏览器 localStorage，点击可修改";
+    } else {
+      b.className = "unset";
+      b.textContent = "Token 未设置 · 点击设置";
+      b.title = "必须设置 Token 才能发消息（服务鉴权用）";
+    }
+  }
+
   // --- health ---
   function checkHealth() {
     fetch("/v1/health").then(function (r) { return r.json(); }).then(function (b) {
       var el = $("status");
       if (b.ok) {
+        PEER = b.peer_id || "local-main";
         el.className = "ok";
         el.innerHTML = '<span class="dot"></span>' + (b.read_write ? "已连接 · 可巩固" : "已连接 · 只读(无Key)");
         el.title = "peer: " + b.peer_id + " · v" + b.version;
@@ -161,6 +183,7 @@
       $("status").innerHTML = '<span class="dot"></span>无法连接服务';
     });
   }
+  function peer() { return PEER || "local-main"; }
 
   // --- chat ---
   function send() {
@@ -171,7 +194,7 @@
     input.value = "";
     addBubble("user", text);
     var body = {
-      peer_id: "local-main",
+      peer_id: peer(),
       session_id: sessionId,
       message: text,
       history: history,
@@ -204,7 +227,7 @@
     var q = input.value.trim() || (history.length ? history[history.length - 1].content : "");
     if (!q) { toast("先输入一句话再预览", true); return; }
     if (!token()) { showTokenMask(); return; }
-    fetch("/v1/inject_preview?q=" + encodeURIComponent(q) + "&peer_id=local-main", {
+    fetch("/v1/inject_preview?q=" + encodeURIComponent(q) + "&peer_id=" + encodeURIComponent(peer()), {
       headers: authHeaders()
     }).then(function (r) { return r.json().then(function (b) { return { status: r.status, body: b }; }); })
       .then(function (res) {
@@ -227,7 +250,7 @@
     fetch("/v1/consolidate", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ peer_id: "local-main", session_id: sessionId, messages: history })
+      body: JSON.stringify({ peer_id: peer(), session_id: sessionId, messages: history })
     }).then(function (r) { return r.json().then(function (b) { return { status: r.status, body: b }; }); })
       .then(function (res) {
         if (res.status !== 200) {
@@ -251,13 +274,14 @@
     $("token-mask").classList.remove("hidden");
     $("token-input").focus();
   }
-  $("btn-token").onclick = showTokenMask;
+  $("token-badge").onclick = showTokenMask;
   $("btn-token-save").onclick = function () {
     var v = $("token-input").value.trim();
     if (!v) { toast("token 不能为空", true); return; }
     localStorage.setItem(TOKEN_KEY, v);
     $("token-mask").classList.add("hidden");
-    toast("Token 已保存");
+    refreshTokenBadge();
+    toast("Token 已保存，可以开始聊天了");
   };
   $("token-input").addEventListener("keydown", function (e) {
     if (e.key === "Enter") { $("btn-token-save").click(); }
@@ -281,6 +305,7 @@
   });
 
   checkHealth();
+  refreshTokenBadge();
   if (!token()) { showTokenMask(); }
 })();
 </script>
