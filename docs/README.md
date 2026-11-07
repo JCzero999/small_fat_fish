@@ -1,6 +1,6 @@
 # Extra Brain（额外大脑）
 
-依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.13.0**（独立 Chat 主场 + Agent API；此前 v0.12.1 表达与人设层、v0.12.0 方案 B FSRS 牢固度、v0.11.0 方案 A 生活感），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
+依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.13.3**（Chat Shell 记忆交互改版：默认自动巩固、手动能力降为高级调试；此前 v0.13.2 主人身份跨端识别、v0.13.0 独立 Chat 主场 + Agent API、v0.12.1 表达与人设层），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
 
 > **文档索引**：设计规范见 `长期记忆「额外大脑」架构规范 v0.9.md`（第 10 节为实现对照）；DSH 宿主接入与跨会话验证见 `HANDOVER.md`；变更记录见 `CHANGELOG.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`；**AstrBot 挂载（QQ 通道）见 `../astrbot-plugin-extra-brain/README.md`；挂载到任意宿主的通用契约见 `MOUNT.md`；独立 Chat 主场契约见 `PRODUCT_NORTH.md` / `SHELL_API.md`；迭代路线图见 `MEMORY_ITERATION_PLAN.md`**。本文档位于 `docs/` 目录。
 
@@ -19,6 +19,32 @@ python -m extra_brain.server --data-dir extra-brain
 - **API**：`/v1/health`（免鉴权）、`/v1/chat`、`/v1/consolidate`、`/v1/inject_preview`、`/v1/core`、`/v1/stats`——除 health 外需 `Authorization: Bearer <token>` 或 `X-Shell-Token`；只绑 `127.0.0.1`，勿对公网开放。契约示例见 `SHELL_API.md`
 - **与 QQ 的关系**：AstrBot 插件继续可用（同 data-dir 不同 peer 互不影响）；文档与默认引导指向主场，QQ 降级为挂载点之一
 - **无 GUI 回归**：`python scripts/shell_regression.py`（六步闭环，无 Key 自动 SKIP）
+
+### 记忆交互（v0.13.3：只聊天，自动记住）
+
+主界面只有聊天框和发送键——**不需要任何「记忆管理」操作**：
+
+| 时机 | 行为 |
+|------|------|
+| 用户消息累计到 N 条 | 后台把**未巩固切片**（上次巩固之后的新消息）POST 到 `/v1/consolidate`，成功后重置切片起点 |
+| 开新会话 | 先冲刷未巩固切片（最多等 15s），再清空界面；失败也放行，片段留待高级面板重试 |
+| 页面隐藏 / 关闭 | `fetch keepalive` 尽力冲刷（`sendBeacon` 无法带鉴权头，故不用） |
+| 巩固进行中 | 串行队列，不阻塞发送；失败静默降级，30s 内不重复重试 |
+| 无 Key / 只读 | 状态显示「只读，无法写入记忆」，聊天仍可用，不报错刷屏 |
+
+配置项（`user_config.json` → `shell`，也可用 `SHELL_*` 环境变量覆盖）：
+
+```json
+"auto_consolidate_enabled": true,
+"auto_consolidate_every_n_user_messages": 8,
+"auto_consolidate_on_new_session": true,
+"auto_consolidate_on_page_hide": true,
+"auto_consolidate_min_messages": 2
+```
+
+顶栏「**高级**」抽屉（默认收起）保留调试能力：预览本轮注入原文、强制「立即写入记忆」、查看 `peer_id` / `session_id` / 最近一次巩固结果与错误。日常不需要打开。
+
+> 前端状态机可用 `node scripts/shell_ui_smoke.js` 冒烟（`FAIL_CONSOLIDATE=1` 跑失败路径），无需浏览器。
 
 ## 启动项目
 
@@ -59,9 +85,10 @@ python -m extra_brain.server --data-dir extra-brain
 ### 启动后验证
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s tests   # 全量单测（v0.13.0：276 项）
+PYTHONPATH=src python -m unittest discover -s tests   # 全量单测（v0.13.3：302 项）
 python scripts/shell_regression.py                     # Shell 六步真实 LLM 闭环（无 Key 自动 SKIP）
-curl http://127.0.0.1:8756/v1/health                   # Shell 存活检查（免鉴权）
+node scripts/shell_ui_smoke.js                         # 前端自动巩固状态机冒烟（无浏览器依赖）
+curl http://127.0.0.1:8756/v1/health                   # Shell 存活检查（免鉴权，含自动巩固策略）
 .\scripts\status-all.ps1                               # QQ 链路三端口检查
 ```
 

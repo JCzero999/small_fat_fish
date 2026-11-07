@@ -123,6 +123,11 @@ class ShellSettings:
         env: Mapping[str, str] | None = None,
         user_config: Mapping[str, Any] | None = None,
         auto_consolidate_every_n: int | None = None,
+        auto_consolidate_enabled: bool | None = None,
+        auto_consolidate_every_n_user_messages: int | None = None,
+        auto_consolidate_on_new_session: bool | None = None,
+        auto_consolidate_on_page_hide: bool | None = None,
+        auto_consolidate_min_messages: int | None = None,
     ) -> None:
         env = env if env is not None else dict(os.environ)
         user_config = user_config or {}
@@ -154,6 +159,60 @@ class ShellSettings:
             self.auto_consolidate_every_n = int(n_raw)
         except (TypeError, ValueError):
             self.auto_consolidate_every_n = 0
+
+        # --- v0.13.3 自动巩固策略（由 shell 前端执行触发，服务端只提供配置）------
+        # 主路径「只聊天」：达到 N 条用户消息、开新会话、页面隐藏时，前端把
+        # **未巩固切片** POST 到 /v1/consolidate。服务端不主动写库，避免双重巩固。
+        self.auto_consolidate_enabled = _as_bool(
+            auto_consolidate_enabled
+            if auto_consolidate_enabled is not None
+            else _pick("SHELL_AUTO_CONSOLIDATE_ENABLED", "auto_consolidate_enabled", True),
+            True,
+        )
+        self.auto_consolidate_every_n_user_messages = _as_int(
+            auto_consolidate_every_n_user_messages
+            if auto_consolidate_every_n_user_messages is not None
+            else _pick(
+                "SHELL_AUTO_CONSOLIDATE_EVERY_N_USER_MESSAGES",
+                "auto_consolidate_every_n_user_messages",
+                8,
+            ),
+            8,
+        )
+        self.auto_consolidate_on_new_session = _as_bool(
+            auto_consolidate_on_new_session
+            if auto_consolidate_on_new_session is not None
+            else _pick(
+                "SHELL_AUTO_CONSOLIDATE_ON_NEW_SESSION", "auto_consolidate_on_new_session", True
+            ),
+            True,
+        )
+        self.auto_consolidate_on_page_hide = _as_bool(
+            auto_consolidate_on_page_hide
+            if auto_consolidate_on_page_hide is not None
+            else _pick(
+                "SHELL_AUTO_CONSOLIDATE_ON_PAGE_HIDE", "auto_consolidate_on_page_hide", True
+            ),
+            True,
+        )
+        self.auto_consolidate_min_messages = _as_int(
+            auto_consolidate_min_messages
+            if auto_consolidate_min_messages is not None
+            else _pick(
+                "SHELL_AUTO_CONSOLIDATE_MIN_MESSAGES", "auto_consolidate_min_messages", 2
+            ),
+            2,
+        )
+
+    def auto_consolidate_policy(self) -> dict[str, Any]:
+        """给 shell 前端的触发策略（/v1/health 下发给 UI，UI 据此决定何时巩固）。"""
+        return {
+            "enabled": bool(self.auto_consolidate_enabled),
+            "every_n_user_messages": max(1, int(self.auto_consolidate_every_n_user_messages)),
+            "on_new_session": bool(self.auto_consolidate_on_new_session),
+            "on_page_hide": bool(self.auto_consolidate_on_page_hide),
+            "min_messages": max(1, int(self.auto_consolidate_min_messages)),
+        }
 
 
 class ExtraBrainServer:
@@ -259,6 +318,8 @@ class ExtraBrainServer:
             "peer_id": self.shell.peer_id,
             "read_write": bool(self.extractor is not None and not self.read_only),
             "data_dir": str(self.data_dir.resolve()),
+            # v0.13.3：UI 据此决定自动巩固时机（触发在 shell 前端，语义不变）
+            "auto_consolidate": self.shell.auto_consolidate_policy(),
         }
 
     def check_shell_auth(self, headers: Mapping[str, str] | None) -> None:
@@ -901,6 +962,26 @@ def _string_list(value: Any, name: str) -> list[str]:
     return value
 
 
+def _as_bool(value: Any, default: bool) -> bool:
+    """宽松布尔解析：环境变量/JSON 里的 "0"/"false"/"off" 都算 False。"""
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off", "none", "")
+    return bool(value)
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_now(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -1019,6 +1100,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"extra_brain sidecar listening on http://{args.host}:{args.port} [{mode}] [{shell_state}]")
     if shell.enabled:
         print(f"chat shell UI: http://{args.host}:{args.port}/shell/")
+        policy = shell.auto_consolidate_policy()
+        print(
+            "auto consolidate: "
+            + (
+                f"on (every {policy['every_n_user_messages']} user msgs, "
+                f"min {policy['min_messages']}, "
+                f"flush on new session={'yes' if policy['on_new_session'] else 'no'}, "
+                f"on page hide={'yes' if policy['on_page_hide'] else 'no'})"
+                if policy["enabled"]
+                else "off"
+            )
+        )
         if shell.token:
             print("打开网页后如提示 Token 未设置，把上面日志里的 token 粘贴进去即可（只需一次）")
     print(f"data dir: {Path(args.data_dir).resolve()}")

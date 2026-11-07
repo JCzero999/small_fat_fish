@@ -38,6 +38,12 @@
     "shell_peer_id": "local-main",
     "shell_token": "",
     "auto_consolidate_every_n": 0,
-    "_comment": "shell_peer_id=local-main 表示与 QQ 记忆隔离的独立主场；想和 QQ 私聊记忆互通，改成 QQ 私聊 peer_id，如 qq:FriendMessage:1975824324（文件名会自动编码对齐，无需手动处理）。"
+    "_comment": "shell_peer_id=local-main 表示与 QQ 记忆隔离的独立主场；想和 QQ 私聊记忆互通，改成 QQ 私聊 peer_id，如 qq:FriendMessage:1975824324（文件名会自动编码对齐，无需手动处理）。",
+    "auto_consolidate_enabled": true,
+    "auto_consolidate_every_n_user_messages": 8,
+    "auto_consolidate_on_new_session": true,
+    "auto_consolidate_on_page_hide": true,
+    "auto_consolidate_min_messages": 2,
+    "_comment_auto": "自动巩固策略（shell 前端执行）：达到 N 条用户消息自动写入；开会话/页面隐藏时冲刷未巩固切片；少于 min_messages 条用户消息不触发。auto_consolidate_every_n 为服务端旧策略，保持 0 即可。"
   }
 }

@@ -1,4 +1,4 @@
-# Chat Shell API 契约（v0.13.0）
+# Chat Shell API 契约（v0.13.3）
 
 服务：`python -m extra_brain.server --data-dir extra-brain`（默认 `127.0.0.1:8756`）。
 
@@ -13,7 +13,8 @@
   （与 AstrBot 插件同一编码，`qq:FriendMessage:1975824324` → `qq_FriendMessage_1975824324-e46c8efb.db`）。
   **与 QQ 记忆互通**：把 `shell.shell_peer_id` 设为 QQ 私聊 peer（如 `qq:FriendMessage:1975824324`）即可共用同一记忆库；
   全局伴侣库默认同为 `<data-dir>/_global_companion.db`，人设跨端一致。
-- **Web UI**：`GET /` 或 `/shell/` 返回最小聊天页（token 存 localStorage）。
+- **Web UI**：`GET /` 或 `/shell/` 返回聊天页（token 存 localStorage）。主界面只有聊天 + 发送，记忆**自动巩固**；
+  顶栏「高级」抽屉（默认收起）保留注入预览与「立即写入记忆」等排查能力。
 
 ---
 
@@ -22,14 +23,25 @@
 ```json
 {
   "ok": true,
-  "version": "0.13.0",
+  "version": "0.13.3",
   "peer_id": "local-main",
   "read_write": true,
-  "data_dir": "D:\\projects\\small_fat_fish\\extra-brain"
+  "data_dir": "D:\\projects\\small_fat_fish\\extra-brain",
+  "auto_consolidate": {
+    "enabled": true,
+    "every_n_user_messages": 8,
+    "on_new_session": true,
+    "on_page_hide": true,
+    "min_messages": 2
+  }
 }
 ```
 
-`read_write=false` 表示未配置 API Key（chat/consolidate 将 503），读取端点不受影响。
+`read_write=false` 表示未配置 API Key 或服务以只读模式运行（chat/consolidate 将 503），读取端点不受影响。
+
+`auto_consolidate` 是**下发策略**：巩固的**触发在 shell 前端**（攒满 N 条 / 开新会话 / 页面隐藏时，把未巩固切片 POST 到
+`/v1/consolidate`），服务端不会自己定时巩固，因此不会出现双重写入。策略来源优先级：`SHELL_AUTO_CONSOLIDATE_*`
+环境变量 > `user_config.json` 的 `shell.auto_consolidate_*` > 默认值。
 
 ---
 
