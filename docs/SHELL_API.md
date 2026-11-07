@@ -92,6 +92,24 @@
 
 ---
 
+## 前端自动巩固契约（v0.13.3）
+
+策略由 `GET /v1/health` 的 `auto_consolidate` 下发，**触发在浏览器端**，服务端没有任何定时器：
+
+| 触发 | 行为 |
+|------|------|
+| 用户消息累计 ≥ `every_n_user_messages` | 后台提交 `history.slice(consolidatedUpTo)`（只含上次成功之后的新消息），200 后指针推进到切片末尾 |
+| 开新会话 | 先冲刷当前切片（最多等 15s）再清界面；失败也放行，片段进内存 backlog |
+| `visibilitychange` / `pagehide` | `fetch(..., {keepalive: true})` 尽力冲刷（`sendBeacon` 无法携带 `Authorization` 头，故不用） |
+
+- **不重复、不脏写**：仅当响应 200 且 `session_id` 与切片起点都没变时才推进指针——迟到的成功不会污染新会话。
+- **失败降级**：巩固不阻塞发送；失败静默（状态行「记忆稍后再同步」），30s 内不自动重试，避免每轮打爆 API。
+- **重试安全**：`/v1/consolidate` 内部有精确去重与合并，重复提交通常不会写出重复记忆；正常路径靠前端指针避免重复提交，重试只作为失败后的补救（不是严格幂等）。
+- **已知限制**：`history` 与 `backlog` 只存在页面内存——**刷新/关闭标签页即结束当前会话**（旧片段靠 `pagehide` 尽力冲刷，未成功的无法恢复）；这不是服务端状态丢失，服务端只认调用方提交的消息。
+- 只读模式（`read_write=false`）下前端完全不做自动巩固，状态显示「只读，无法写入记忆」。
+
+---
+
 ## POST /v1/chat（核心）
 
 ```json
@@ -124,9 +142,10 @@ system = 人设正文（`persona_file`，v0.12.1 同源）+ 注入文本 + 安�
 ```
 
 - LLM 不可达 → `502 {"error": "LLM call failed: …"}`；无客户端 → `503`。
-- **本版默认不在服务端自动巩固**（由 UI「记住以上对话」按钮或客户端策略调 `/v1/consolidate`）。
-  可选 `shell.auto_consolidate_every_n`（默认 `0` = 关）：每 N 轮自动巩固，报告在响应的
-  `auto_consolidate` 字段（失败则 `auto_consolidate_error`，不阻塞回复）。
+- **服务端默认不自动巩固**：v0.13.3 起由 shell 前端按 `/v1/health` 下发的策略触发
+  （攒满 N 条用户消息 / 开新会话 / 页面隐藏时把**未巩固切片** POST 到 `/v1/consolidate`），
+  服务端不自己定时，避免双重写入。可选 `shell.auto_consolidate_every_n`（默认 `0` = 关）保留为
+  服务端每 N 轮的兜底通道，报告在响应的 `auto_consolidate` 字段（失败则 `auto_consolidate_error`，不阻塞回复）。
 
 ---
 
@@ -148,3 +167,18 @@ system = 人设正文（`persona_file`，v0.12.1 同源）+ 注入文本 + 安�
 
 `python scripts/shell_regression.py`：health → chat×3 → consolidate → 新 session 召回 →
 关键词断言，退出码 0/1（无 `DEEPSEEK_API_KEY` 时 SKIP）。
+
+`node scripts/shell_ui_smoke.js`：用 DOM 桩跑真实前端脚本，验证自动巩固的触发时机与失败路径
+（`FAIL_CONSOLIDATE=1`），不依赖浏览器。
+
+---
+
+## 常见问题排查
+
+| 现象 | 原因与处理 |
+|------|------|
+| 发消息 `401 invalid or missing shell token` | 浏览器 localStorage（键 `shell_token`）里是旧 token。Ctrl+F5 强刷，或点顶栏 Token 徽章重新粘贴启动日志里的最新值 |
+| 网页里她「不认识我」 | `shell.shell_peer_id` 不是 QQ 私聊 peer，或两边 `--data-dir` 不同。`/v1/health` 的 `peer_id` 必须等于 `qq:FriendMessage:<QQ号>`，且与插件 `data_dir` 指向同一个 `extra-brain/` |
+| 群里认不出主人 | `user_config.json → identity.owner_accounts` 未配，或插件未重启（身份卡在进程内同步一次） |
+| `curl http://127.0.0.1:8756/v1/health` 返回 502 | 系统代理拦了 localhost。加 `--noproxy '*'`，或改用 Python `urllib` |
+| 改了 `server.py` 但行为没变 | sidecar 不热加载，必须重启 `python -m extra_brain.server`（前端静态页可按 Ctrl+F5 缓存刷新） |

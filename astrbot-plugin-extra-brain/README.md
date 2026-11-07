@@ -28,13 +28,31 @@
 |---|---|---|
 | `backend` | `local` | `local` 进程内直连 / `http` 走 sidecar |
 | `extra_brain_src_path` | 空 | local 后端的 extra_brain 源码 src 目录（留空用 pip 安装版） |
-| `data_dir` | `data/extra_brain` | 记忆库数据目录，每 peer 一个 .db |
+| `data_dir` | `data/extra_brain` | 记忆库数据目录，每 peer 一个 .db。**本机已改为仓库 `D:/projects/small_fat_fish/extra-brain`（唯一真相源，见下节）** |
+| `companion_db` | 空 | 全局伴侣库路径，本机为 `D:/projects/small_fat_fish/extra-brain/_global_companion.db`；需与 Shell 的 `--data-dir` 同名文件，否则人设 / 主人身份卡不互通 |
 | `base_url` | `http://127.0.0.1:8756` | http 后端的 sidecar 地址 |
 | `peer_scope` | `auto` | `auto` 智能剥离（webchat 按用户）/ `full_umo` 严格按会话源 |
 | `inject_enabled` | true | 关闭则只积累不注入 |
 | `consolidate_every` | 8 | 自动巩固轮数阈值 |
 | `context_turns` | 5 | 检索携带的近期对话轮数 |
 | `token_limit` | 0 | 注入 token 预算（0 = 库默认 1800） |
+| `user_config_path` | `config/user_config.json` | 人设 / 安全规范 / API Key / 主人身份卡（`identity.owner_accounts`）来源 |
+
+### 数据目录：仓库 `extra-brain/` 是唯一真相源
+
+QQ、Web Shell、将来的抖音等都只是**挂载点**，`data_dir` 一律指向仓库 `D:\projects\small_fat_fish\extra-brain\`
+（2026-11-07 起；原 `astrbot-runtime\data\extra_brain\` 保留作备份，不可再写入）。一个 peer 一个库，
+文件名是 `_filename_for_peer(peer_id)`：`qq:FriendMessage:1975824324` → `qq_FriendMessage_1975824324-e46c8efb.db`
+（与 Shell 的 `server.py` 同一编码，所以两端能打开同一个人）。
+
+改 `data_dir` / `companion_db` 需重启 AstrBot；**不要重新初始化已有库**。
+
+### v0.13.x 新增能力（适配器侧）
+
+- **主人身份卡（v0.13.2）**：`user_config.json → identity.owner_accounts`（如 `"主人QQ:1975824324|称呼:JCzero|关系:父女"`），进程启动后首次调用时幂等写入**全局伴侣层 Core**——Core 始终完整注入，所以私聊 / 群聊 / 网页都认得出主人
+- **群聊发言者标注（v0.13.2）**：群消息在检索 query 与巩固缓冲里统一加 `[发言者 <QQ号>|<昵称>]`，抽取器能把记忆绑定到具体的人，模型也知道这句话是谁说的；私聊保持原文
+- **与 Shell 记忆互通（v0.13.1）**：插件 `data_dir` 与 Shell `--data-dir` 指向同一目录，且 Shell 的 `shell.shell_peer_id` 设为 `qq:FriendMessage:<QQ号>` 即可共用同一个库
+- **注入预算**：真实库默认注入已接近 1728/1800，记忆继续增长时调大 `token_limit` 或精简热记忆
 
 ## 指令
 
@@ -62,12 +80,14 @@
 3. `/reset`（清空对话上下文）
 4. `我上次告诉你的记忆测试暗号是什么？` → 答出「海豚-3311」✅（已验证 2026-11-01）
 
-QQ 侧 peer 天然按 QQ 号隔离（`aiocqhttp:FriendMessage:<QQ号>`），群聊按群号；无需任何配置。
+QQ 侧 peer 天然按 QQ 号隔离（本机 AstrBot 的 UMO 前缀是 `qq`：`qq:FriendMessage:<QQ号>`，群聊 `qq:GroupMessage:<群号>`；旧版平台前缀可能是 `aiocqhttp`，以实际 `unified_msg_origin` 为准，文件名带 md5 后 8 位不影响稳定）；无需任何配置。
 
 ## 已验证环境
 
 - AstrBot 4.29.4（Python 3.12，conda env `astrbot`）
-- extra-brain 0.5.0（editable 安装指向仓库 src/）
+- extra-brain **0.13.3**（editable 安装指向仓库 src/；适配器注入/巩固/指令链路自 v0.5 起零改动）
 - WebChatUI + QQ（NapCat Shell 4.18.41 / QQ NT 9.9.33-52230，机器人号 1178469499），DeepSeek `deepseek-flash` 对话 + 抽取
 - 2026-10-31 WebChatUI 跨会话暗号验证通过；2026-11-01 QQ 私聊跨上下文暗号验证通过（详见 `../docs/CHANGELOG.md`）
 - 2026-11-01 **v0.5.0 升级回归通过**：备份 → 重启 → 旧记忆零丢失（QQ 15 条）→ 新暗号四步验证 → 七因子分档在真实数据生效
+- 2026-11-07 **v0.13.1 互通验证**：插件与 Shell 指向同一 `extra-brain/` + 同一 QQ peer，Shell 只读注入 1709 tokens，QQ 侧记忆全召回
+- 2026-11-07 **v0.13.2 群聊识别验证**：`owner_accounts` 写入全局 Core，群消息带 `[发言者 …]` 标注后模型能指出是谁在说话

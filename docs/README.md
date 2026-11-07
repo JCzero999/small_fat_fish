@@ -29,6 +29,7 @@ python -m extra_brain.server --data-dir extra-brain
 | 用户消息累计到 N 条 | 后台把**未巩固切片**（上次巩固之后的新消息）POST 到 `/v1/consolidate`，成功后重置切片起点 |
 | 开新会话 | 先冲刷未巩固切片（最多等 15s），再清空界面；失败也放行，片段留待高级面板重试 |
 | 页面隐藏 / 关闭 | `fetch keepalive` 尽力冲刷（`sendBeacon` 无法带鉴权头，故不用） |
+| 刷新 / 关闭标签页 | 当前会话结束：可见片段尽力冲刷，**刷新后是新会话**（对话与待巩固队列都在页面内存里，不落盘） |
 | 巩固进行中 | 串行队列，不阻塞发送；失败静默降级，30s 内不重复重试 |
 | 无 Key / 只读 | 状态显示「只读，无法写入记忆」，聊天仍可用，不报错刷屏 |
 
@@ -136,7 +137,7 @@ curl http://127.0.0.1:8756/v1/health                   # Shell 存活检查（�
 - **HNSW 索引**：纯标准库实现（M=16 / efConstruction=200 / efSearch=64，id 哈希定层高可复现）；`VectorIndex` 小库精确扫描，≥2000 条自动切换
 - **静态加密**：`EXTRA_BRAIN_ENCRYPTION_PASSPHRASE` 口令（PBKDF2 派生），全表透明加解密。注意：这是混淆级加密，生产建议叠加文件系统加密（BitLocker / LUKS）
 - **遗忘链路**：`forget <id>` 默认 P1 墓碑（清内容留 digest 入审计）；`--hard --yes` 才 P0 物理删除，永不自动执行
-- **CI**：GitHub Actions，Python 3.11/3.12 矩阵 + 99 项单测 + CLI 冒烟
+- **CI**：GitHub Actions，Python 3.11/3.12 矩阵 + 302 项单测 + CLI 冒烟
 
 ### v0.6.0 情感事件状态机接通 + 适配器面板指令
 
@@ -160,6 +161,36 @@ curl http://127.0.0.1:8756/v1/health                   # Shell 存活检查（�
 - **崩溃安全影子日志**（v0.3.0 遗留清零）：`session_log` 巩固前落 pending、成功与记忆**同事务**标 done、异常标 failed——LLM 抽取期间崩溃输入不丢
 - **`rebuild from-log --yes`**：从 operation_log after 快照整表重放 + 重算向量（单事务，损坏快照跳过不猜）；**`rebuild replay-pending`**：重放未巩固的影子输入
 - **主动开口已上线**：AstrBot 循环运行中；插件配置在 `data/config/astrbot_plugin_extra_brain_config.json` 的 `proactive_enabled`（注意：不是 cmd_config 的 plugin_store）
+
+### v0.7.0–v0.9.0 自我状态 / 倾向种子 / 人生快照
+
+- **SelfState 自我状态机**：能量、疲劳、心情等内部状态持久化，注入【这一刻的自己】与【内在声音】；影子模式可只记录不注入（v0.11）
+- **DispositionSeed 倾向种子**（v0.8.0）：从长期记忆里抽象稳定的行为倾向；CLI `list-dispositions` / `abstract-dispositions`
+- **疲劳完整化 + 未平复优先 + 人生快照**（v0.9.0）：多因素 energy / `fatigue_reason` / 临界行为；未平复情感事件在注入与主动开口中优先；`snapshot` 系列输出人生阶段快照；主动开口决策重构（由头优先级链）
+
+### v0.10.0 配置集中 + 安全规范
+
+- `config/user_config.json(.template)`：identity / safety_rules / api / proactive 一处填写全端生效；实际文件 gitignore，模板入库
+- 安全规范扩至 10 条（防上当 / 防逆向 / 防泄密 / 身份冒用 / 越狱兜底），追加在注入上下文末尾，对用户不可见
+- 第三方 QQ 插件（qqprofile_ex / qzone）接入，签名与说说引导词人设化
+
+### v0.11.0 生活感补全（方案 A）
+
+- `active_goals` 结构化 + 中文相对时间解析（今晚 / 明早 / 下周X / N 天后…），到期约定提醒优先于一切由头，投递成功记额度
+- 「忽然想起」：按重要度 / 情绪 / 未平复 / 激活数打分，冷却期与日额度内概率性提起旧事
+- 影子模式：状态照常写库，但注入跳过自我状态段落；CLI `shadow`、`/memory shadow on|off|status`
+
+### v0.12.0–v0.12.1 牢固度与表达层
+
+- **FSRS 风格牢固度** `solidity.py`：`compute_retrievability` + `apply_review`（想起就加固）+ `batch_decay`（久不提自动冻结）；冻结 ≠ 删除，搜索仍可查；CLI `decay` / `freeze`，`/memory stats` 增牢度分布
+- **人设正文** `persona/xiaotun_v1.md`（`persona_file` 多 base 解析，缺省回退旧 `identity`）；**诚实契约行** `honesty_footer`；群聊规矩 `group_reply_mode`；签名 / 空间引导词；表情规范（文案级）
+
+### v0.13.0–v0.13.3 独立主场（Chat Shell + Agent API）
+
+- **v0.13.0**：`/v1/chat|consolidate|inject_preview|health|core|stats` + 单文件 Web UI（`/shell/`），Bearer token，默认只绑 `127.0.0.1`
+- **v0.13.1**：Shell 与 QQ 记忆互通（peer 文件名编码对齐插件、`_global_companion.db` 同名）；数据唯一真相源迁到仓库 `extra-brain/`
+- **v0.13.2**：主人身份卡 `identity.owner_accounts` 写全局伴侣层 Core（永远在场）+ 群聊 `[发言者 QQ|昵称]` 标注
+- **v0.13.3**：记忆交互改版——主路径只聊天，自动巩固（切片 / 新会话 / 页面隐藏），手动能力收进「高级」抽屉
 
 运行时只使用 Python 标准库，不依赖外部向量服务；加密、HNSW、真实嵌入全部可选。
 
@@ -892,7 +923,7 @@ DSH 是 Developer Preview；AstrBot 为活跃维护的成熟框架（支持 QQ �
 
 ## 验证边界
 
-- **离线单测 99 项**（24 项基础 + 12 项 sidecar + 63 项 v0.2–v0.6 新特性）：数据校验、持久化、空抽取与闲聊过滤、去重、冲突修正、七因子保留度与归档、保护与晋升、事务回滚、加权检索与四路召回、注入预算、跨会话情绪召回、人格锚回滚、感觉/工作记忆、只读模式、存储统计、陪伴层五表 CRUD、主动开口决策矩阵、加密密文断言、HNSW 召回、遗忘链路（P1/P0）、情感事件状态机集成（默认 open / 显式推进 / 非法迁移拒绝 / 反漠视不归档 / schema 校验）、sidecar HTTP（per-peer 隔离、错误码、只读降级、/stats、/forget）。Python 3.11/3.12 双版本 CI 全绿（GitHub Actions）。
+- **离线单测 302 项**（基础 / sidecar / v0.2–v0.13 各期特性：v2 全量、v11 53、v12 36、v121 5、v13 22、v132 10、v133 16 等）：数据校验、持久化、空抽取与闲聊过滤、去重、冲突修正、七因子保留度与归档、保护与晋升、事务回滚、加权检索与四路召回、注入预算、跨会话情绪召回、人格锚回滚、感觉/工作记忆、只读模式、存储统计、陪伴层五表 CRUD、主动开口决策矩阵、加密密文断言、HNSW 召回、遗忘链路（P1/P0）、情感事件状态机集成（默认 open / 显式推进 / 非法迁移拒绝 / 反漠视不归档 / schema 校验）、sidecar HTTP（per-peer 隔离、错误码、只读降级、/stats、/forget）。Python 3.11/3.12 双版本 CI 全绿（GitHub Actions）。
 - **向后兼容**：v0.5.0 代码以只读方式完整加载 AstrBot 运行期的旧 `.db`（QQ 15 条 + WebChat 1 条）验证通过，新字段全部缺省安全，无需迁移。
 - **端到端**：AstrBot + WebChatUI 跨会话暗号、AstrBot + QQ 跨上下文暗号均验证通过；v0.5.0 重启后在真实 QQ 库上「新增暗号写入 + 跨 reset 召回 + 旧记忆零丢失」四步回归通过，七因子分档在真实数据上生效（高激活记忆落 P5，新写入落 P4）。
 

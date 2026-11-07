@@ -36,9 +36,9 @@
 | 部分 | 状态 |
 |------|------|
 | Python 记忆库 | ✅ **v0.13.3**：**Chat Shell 记忆交互改版——主路径只聊天，自动巩固（攒满 N 条用户消息 / 开新会话 / 页面隐藏时把未巩固切片 POST 到 `/v1/consolidate`，串行队列 + 失败节流），调试能力收进「高级」抽屉；`/v1/health` 下发策略，记忆语义零改动**。此前 v0.13.2 主人身份跨端识别（`owner_accounts` 身份卡写全局伴侣层 Core + 群聊 `[发言者 QQ|昵称]` 标注）、v0.13.1 记忆互通（peer 文件名/companion 库对齐插件）+ 数据架构统一（唯一真相源 = 仓库 `extra-brain/`）。主场迁移——**独立 Chat Shell（`/shell/` Web UI）+ Agent HTTP API（`/v1/chat|consolidate|inject_preview|health|core|stats`，Bearer token 鉴权，默认 peer `local-main`）**；更早累计 v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子 + v0.11.0 方案 A 生活感 + v0.12.0 方案 B FSRS 牢固度 + v0.12.1 表达与人设层。**302 项单测全绿**（2 skipped）+ `scripts/shell_ui_smoke.js` 前端状态机冒烟，真实 DeepSeek 无 GUI 回归（`scripts/shell_regression.py`）与自动巩固召回端到端通过 |
-| **Chat Shell（主场）** | ✅ **v0.13.0 已落地**：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`；token 见 `SHELL_TOKEN` env 或 `config/user_config.json` 的 `shell.shell_token`（本机已设 `xtn-shell-local-1a2b3c4d`）；契约见 `docs/SHELL_API.md`；北极星见 `docs/PRODUCT_NORTH.md` |
+| **Chat Shell（主场）** | ✅ **v0.13.3**（v0.13.0 起，v0.13.3 自动巩固）：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`；token 见 `SHELL_TOKEN` env 或 `config/user_config.json` 的 `shell.shell_token`（本机已设 `xtn-shell-local-1a2b3c4d`）；契约见 `docs/SHELL_API.md`；北极星见 `docs/PRODUCT_NORTH.md` |
 | sidecar（HTTP 服务） | ✅ 已落地并扩展：旧端点（`/inject` `/consolidate` `/stats` `/forget` `/shadow` `/freeze` `/decay` 等）保持不变（AstrBot http 后端兼容）；v0.13.0 新增 `/v1/*` 与静态 UI，`--no-shell` 可关闭 |
-| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 254 项单测 + CLI 冒烟 |
+| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 302 项单测 + CLI 冒烟 |
 | **AstrBot 适配器** | ✅ **已端到端验证**：注入、巩固、peer 跨会话共享、`/memory` 指令、暗号验证通过（2026-10-31） |
 | **QQ 通道（NapCat + OneBot v11）** | ✅ **已端到端验证**：私聊按 QQ 号隔离记忆、`/reset` 后跨上下文答出暗号（2026-11-01） |
 | **v0.5.0 升级回归** | ✅ 2026-11-01：先备份 → 重启 → 旧记忆零丢失（QQ 15 条 + WebChat 1 条）→ 新暗号「金枪鱼-8866」四步验证通过；七因子分档在真实数据生效（高激活 P5 / 新写入 P4） |
@@ -55,16 +55,16 @@
 ```
 small_fat_fish/
 ├── docs/
-│   ├── 长期记忆「额外大脑」架构规范 v0.9.md  # 设计规范 + 第10节实现对照（含 §10.7 v0.10–0.12 增补）
+│   ├── 长期记忆「额外大脑」架构规范 v0.9.md  # 设计规范 + 第10节实现对照（含 §10.7 v0.10–0.13 增补）
 │   ├── README.md                          # Python 库接入与运行说明
 │   ├── MOUNT.md                           # ★ 挂载规范：任何宿主接入 extra_brain 的通用契约
-│   ├── MEMORY_ITERATION_PLAN.md           # ★ 迭代路线图（v0.2→v0.5 已全部落地）
+│   ├── MEMORY_ITERATION_PLAN.md           # 迭代路线图（v0.2→v0.5 历史主线；后续版本看 CHANGELOG）
 │   ├── 额外大脑 迭代设计文档1104.md        # ★ 方案 A/B/C 设计（v0.11/0.12/0.13 路线）
 │   ├── 额外大脑 迭代函数级任务清单1104.md  # ★ A/B/C 函数级实现清单（验收后 C 直接照做）
 │   ├── 小豚「表达与人设层」迭代方案V0.12.1.md # ★ 表达层方案（persona/引导词/群聊/诚实契约）
 │   ├── CHANGELOG.md                       # 变更记录
 │   └── HANDOVER.md                        # 本文档
-├── .github/workflows/ci.yml              # CI：3.11/3.12 + 254 测试 + CLI 冒烟
+├── .github/workflows/ci.yml              # CI：3.11/3.12 + 302 测试 + CLI 冒烟
 ├── pyproject.toml                        # 包定义（无第三方依赖）
 ├── persona/
 │   └── xiaotun_v1.md                      # ★ 小豚人设正文 v1（v0.12.1，persona_file 指向）
@@ -177,7 +177,7 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 3. 发 `/reset`（清空对话上下文，QQ 上「新会话」的等价操作）
 4. `我上次告诉你的记忆测试暗号是什么？` → 答出「海豚-3311」✅（记忆库三层证据：语义 `用户/拥有QQ测试暗号/海豚-3311` + 活跃线程 + Core `important_life_facts`）
 
-排障辅助：`/memory status`（peer/后端/待巩固数）、`/memory list semantic`、`/memory core`、记忆库文件在 `<runtime>\data\extra_brain\`（如 `qq_FriendMessage_<QQ号>-<hash>.db`，私聊按 QQ 号、群聊按群号隔离）。
+排障辅助：`/memory status`（peer/后端/待巩固数）、`/memory list semantic`、`/memory core`、记忆库文件在仓库 `D:\projects\small_fat_fish\extra-brain\`（如 `qq_FriendMessage_<QQ号>-<hash>.db`，私聊按 QQ 号、群聊按群号隔离）。
 
 **v0.9.0 新增 AstrBot 指令**：`/memory self`（含 energy_tier + fatigue_reason）、`/memory disposition`、`/memory abstract`、`/memory sync-persona`（私聊→群聊人设同步）、`/memory pull-persona`、`/memory snapshot` / `snapshots` / `snapshot-rollback`。输入 `/memory` 查看完整清单。
 
@@ -187,6 +187,12 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 **私聊人设同步到群聊**：`/memory sync-persona` → AstrBot 重启自动继承（`pull_persona_from_companion` 在 `_brain(peer_id)` 首次创建时自动调用，前提是 companion_db 已配置）。
 
+**Chat Shell**（2026-11-07 通过，v0.13.3 自动巩固主路径）：
+1. 仓库根跑 `python -m extra_brain.server --data-dir extra-brain`，浏览器打开 `http://127.0.0.1:8756/shell/`，粘贴启动日志里的 token
+2. 连续聊满 8 条用户消息（或攒几条后点「新会话」触发冲刷）——**全程不点任何记忆按钮**，状态行应闪现「记忆同步中…」→「已写入长期记忆」
+3. 开「新会话」问「我下周三要干什么？」→ 答出「甲状腺复查」✅（真实 DeepSeek 已跑通）
+- 高级抽屉自检：`peer_id` 应为 `qq:FriendMessage:<QQ号>`、未同步条数为 0、最近一次巩固摘要非空；`node scripts/shell_ui_smoke.js` 可无浏览器验证触发时机
+
 选「蓝鲸-7749」这种**不可猜**的暗号是关键，能排除「模型靠上文/常识蒙对」。**必须跨上下文**——同一会话里 transcript 自带上下文，会假阳性。
 
 ---
@@ -195,7 +201,7 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 0. ⚠️ **记忆库数据库初始化（超级重要，必须亲自确认）**：**2026-11-07 起数据目录统一为仓库下的 `D:\projects\small_fat_fish\extra-brain\`**（此前在 `D:\projects_software\astrbot-runtime\data\extra_brain\`，已完整迁移并校验，旧目录保留作备份）。各 `.db` 文件（私聊按 QQ 号、群聊按群号、WebChatUI 按登录用户隔离）只能在**最开始的时候初始化一次**。之后**不能随意删除或重新初始化**——这会导致该 peer 的全部长期记忆（Core、语义、情节、风格记忆 + 向量 + 审计日志）永久丢失。如果真需要重新初始化，必须**先征得本人（用户）亲自确认**，切勿自行决定。这是记忆库作为「产品」的核心资产，数据即资产，切勿误删。
 
-1. **peer_id 不能用会话 ID**。AstrBot 的 webchat umo 是 `webchat:FriendMessage:webchat!<user>!<conv_id>`，**conv_id 每开一个新对话就变**——必须剥掉（适配器 `resolve_peer_id` 已处理，2026-10-31 首版正则没对上三段式 umo 导致每会话一个库，跨会话验证当场暴露）。QQ 侧天然正确：`aiocqhttp:FriendMessage:<QQ号>` / `GroupMessage:<群号>` 本身稳定。DSH 侧等价坑：`session.id` 每「新会话」一个新 peer。
+1. **peer_id 不能用会话 ID**。AstrBot 的 webchat umo 是 `webchat:FriendMessage:webchat!<user>!<conv_id>`，**conv_id 每开一个新对话就变**——必须剥掉（适配器 `resolve_peer_id` 已处理，2026-10-31 首版正则没对上三段式 umo 导致每会话一个库，跨会话验证当场暴露）。QQ 侧天然正确：`qq:FriendMessage:<QQ号>` / `qq:GroupMessage:<群号>` 本身稳定（旧版平台前缀是 `aiocqhttp`，以实际 UMO 为准）。DSH 侧等价坑：`session.id` 每「新会话」一个新 peer。
 2. **NapCat v4.18.42 启动即崩（error code v2:-8）**：已知回归 bug（[issue #2145](https://github.com/NapNeko/NapCatQQ/issues/2145)），同环境 4.18.41 正常。**本机固定用 4.18.41**（payload 在 `D:\temp\napcat-41841`，已替换进 Shell 目录）。升级 NapCat 前先查该 issue。
 3. **NapCat 官方 launcher.bat 依赖注册表 QQ 路径**：OneKey 装的 QQ 无注册表项，bat 会 pause 卡住。直接用 `NapCatWinBootMain.exe <QQ.exe路径> <NapCatWinBootHook.dll路径>` + 四个 `NAPCAT_*` 环境变量启动（见 §4 脚本）。
 4. **DSH 插件加载失败根因**（未修）：`import @deepseek-ai/*` 内部包未声明 `peerDependencies`，DSH 自定义模块解析器回退原生解析找不到包 → 模块 load 失败。修法已定（自包含 + 内联函数），已被 AstrBot 路线取代优先级。
@@ -213,15 +219,20 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 16. **脚本位置**：`start-all.ps1` 等在**仓库** `scripts\` 目录下，不在 runtime 根目录；执行前工作目录要是仓库根，且需先加载 `$env:DEEPSEEK_API_KEY`（或已配 User 级环境变量）。脚本内部把 AstrBot 工作目录固定指向 `D:\projects_software\astrbot-runtime`，换机器要改。
 17. **`astrbot plug install` 不可用**：官方插件 API 域名已 301 迁移（`api.soulter.top` → `cloud.astrbot.app`），CLI 不跟随重定向，一律报 `Plugin not found or already installed`。改走 `data/plugins.json` 索引里的 S3 `download_url` 手动下载解压（见 §9）。
 18. **插件目录名带 hash 后缀**：S3 zip 解压出来是 `astrbot_plugin_xxx-<commit hash>`。加载能成功，但 `data/config/` 里的配置会按这个长名字建档，后续改名会导致配置丢失——**下载后立刻 rename 成干净名再首次启动**。
+19. **Shell token 有优先级，浏览器还缓存一份**：`SHELL_TOKEN` env > `user_config.json → shell.shell_token` > 启动随机。网页把值存在 `localStorage["shell_token"]`，服务端换了 token 后旧页面必然 `401`——Ctrl+F5 或点顶栏 Token 徽章重填（v0.13.x 前端保存前会先打 `/v1/stats` 校验，无效直接提示）。
+20. **sidecar 不热加载**：改 `server.py` 后必须重启进程（静态页可 Ctrl+F5，Python 不行）。8756 被旧进程占着时新进程起不来，先停干净再启；「新端点 404」九成是旧进程还在跑。
+21. **localhost 会走系统代理**：`curl http://127.0.0.1:8756/...` 报 502 是代理拦的，加 `--noproxy '*'` 或改用 Python `urllib`；不要据此判断服务挂了。
+22. **网页对话不落盘**：Shell 的 `history` / 待巩固 `backlog` 只在页面内存，**刷新 = 新会话**（`pagehide` 尽力冲刷未巩固切片）。验证跨会话记忆请用「新会话」按钮，不要用 F5。
+23. **peer 文件名编码必须逐字一致**：`qq:FriendMessage:1975824324` → `qq_FriendMessage_1975824324-e46c8efb.db`（安全字符化 + md5 前 8 位，与插件 `_filename_for_peer` 一字不差）。Shell 或插件任一侧改了编码，就会各开一个空库——表现正是「网页里她不认识我」。核对 `/v1/health` 的 `peer_id` 与 `extra-brain/` 下真实文件名即可定位。
 
 ---
 
 ## 7. 下一步（建议顺序）
 
-> v0.2→v0.5 的路线（`MEMORY_ITERATION_PLAN.md`）已全部落地；情感状态机与 /memory stats/forget 已接通（2026-11-01）；**v0.11.0 方案 A（生活感补全）与 v0.12.0 方案 B（FSRS 牢固度）均已落地（2026-11-04，249 项测试全绿）；v0.12.1 表达与人设层已落地（2026-11-05，254 项全绿）**。以下是剩余收尾与下一期候选：
+> v0.2→v0.5 的路线（`MEMORY_ITERATION_PLAN.md`）已全部落地；情感状态机与 /memory stats/forget 已接通（2026-11-01）；**v0.11.0 方案 A（生活感补全）与 v0.12.0 方案 B（FSRS 牢固度）均已落地（2026-11-04，249 项测试全绿）；v0.12.1 表达与人设层已落地（2026-11-05，254 项全绿）；v0.13.0–v0.13.3 主场迁移 + 记忆互通 + 主人身份卡 + 自动巩固已落地（2026-11-07，302 项全绿）**。以下是剩余收尾与下一期候选：
 
-0. **A/B 真实链路验收 + 表达层人工验收 H1–H6**：功能与 254 项单测已落地；QQ 说「明天提醒我XX」→ 到点主动开口、旧记忆久不提淡出自动注入但搜索仍能找到、「你是谁」自报小豚非助手腔、群内无关消息不条条回、签名/说说文案像人设——日常使用中观察确认（迭代方案 §3 表）。
-1. **方案 C：自主记账（v0.13.0）**——巩固产出候选记忆，经模型/用户确认后再正式写入（`CandidateMemory` + `AutonomyConfig`，默认关）。任务清单在 `额外大脑 迭代函数级任务清单1104.md`（A+B 稳定跑 1–2 周后启动）。
+0. **A/B 真实链路验收 + 表达层人工验收 H1–H6**：功能与 302 项单测已落地；QQ 说「明天提醒我XX」→ 到点主动开口、旧记忆久不提淡出自动注入但搜索仍能找到、「你是谁」自报小豚非助手腔、群内无关消息不条条回、签名/说说文案像人设——日常使用中观察确认（迭代方案 §3 表）。
+1. **方案 C：自主记账（v0.14.0）**——巩固产出候选记忆，经模型/用户确认后再正式写入（`CandidateMemory` + `AutonomyConfig`，默认关）。任务清单在 `额外大脑 迭代函数级任务清单1104.md`（A+B 稳定跑 1–2 周后启动；v0.13.x 已被主场/互通/身份卡/记忆交互占用）。
 1. ~~**emotion_state 接进抽取链路**~~ ✅ 已落地：抽取 prompt 输出 `emotion_state`（新事件默认 open）与 `emotion_updates`（推进已有情节）；巩固侧状态机校验迁移（非法转换拒绝并记警告）；反漠视规则生效——未平复事件（open/acknowledged/attended 且带情绪）保底温层、永不自动归档、检索加权 +0.10 并豁免分数门槛。
 2. ~~**`/memory status` 展示保留度档位分布**~~ ✅ 已落地：`/memory stats`（档位分布/归档比例/库体积）；`/memory forget <id>`（P1 墓碑默认；P0 物理删除需 `--hard --yes` 双确认，适配器不会自动批准）。
 3. ~~**主动开口定时器接线**~~ ✅ 已落地并**上线运行**（v0.6.0 收官）：适配器 `on_astrbot_loaded` 起 asyncio 循环，按「检查间隔 + 概率骰 + 每日上限 + 静默阈值 + 安静时段」调库 `build_proactive_prompt` 拿由头与素材，用 `context.llm_generate` 生成台词、`context.send_message(umo, ...)` 投递（回复路由来自最近人类消息的 umo，并持久化进 `ProactiveConfig.last_umo`）。指令：`/memory proactive status|enable|disable|test`。注意：**插件配置写在 `data/config/astrbot_plugin_extra_brain_config.json`**（不是 cmd_config 的 plugin_store），`proactive_enabled=true` 已开启，日志确认循环运行中。
@@ -244,7 +255,9 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 - **启动全部（QQ）**：`.\scripts\start-all.ps1`（工作目录：仓库根；顺带拉起 AstrBot + NapCat，内置端口占用检查。等价手动命令：conda env `astrbot` 下 `astrbot.exe run`，工作目录 `D:\projects_software\astrbot-runtime`）
 - **停止全部**：`.\scripts\stop-all.ps1`；若中断（曾遇 exit -1）用 `Get-Process | ? {$_.ProcessName -in 'python','astrbot','QQ','NapCatWinBootMain'} | Stop-Process -Force` 兜底，再确认三端口清空
 - **插件配置**：`D:\projects_software\astrbot-runtime\data\config\astrbot_plugin_extra_brain_config.json`（`data_dir` / `companion_db` 已指向 `D:/projects/small_fat_fish/extra-brain`，2026-11-07 起）
-- **验证记忆**：暗号三步法见 §5（WebChatUI 与 QQ 两套均已验证）
+- **验证记忆**：暗号三步法见 §5（WebChatUI / QQ / Chat Shell 三套均已验证）
+- **Chat Shell（主场，不开 QQ）**：仓库根 `python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`；token 见启动日志 `[shell on (peer …, token …)]` 或 `config/user_config.json → shell.shell_token`（本机 `xtn-shell-local-1a2b3c4d`）。契约见 `docs/SHELL_API.md`，北极星见 `docs/PRODUCT_NORTH.md`
+- **QQ 链路启停**：`scripts/start-all.ps1 1178469499` / `stop-all.ps1` / `status-all.ps1`（shell 不在其中，单独起）
 - **AstrBot dashboard**：`http://127.0.0.1:6185`（密码见启动横幅/环境变量方式见 §4）
 - **机器人 QQ**：`1178469499`（NapCat WebUI：`http://127.0.0.1:6099/webui`，token 见 NapCat 启动日志）
 - **记忆库数据**：`D:\projects\small_fat_fish\extra-brain\`（2026-11-07 起唯一真相源；每 peer 一个 .db，文件名经 `_filename_for_peer` 编码；换宿主=新宿主 data_dir 指向此目录。旧位置 `D:\projects_software\astrbot-runtime\data\extra_brain\` 保留作备份）
@@ -296,7 +309,7 @@ D:\projects_software\astrbot-runtime\    ← 运行目录（含密钥/记忆库�
 | `config/` | ★ 只发 `user_config.json.template`（人设 / 10 条安全规范 / API / 主动开口模板） | ✅ 模板 |
 | `scripts/` | start-all / stop-all / status-all / watchdog / install-autostart 等 PowerShell | ✅ |
 | `docs/` | 架构规范 v0.9、README、MOUNT、MEMORY_ITERATION_PLAN、CHANGELOG、HANDOVER | ✅ |
-| `tests/` | 6 个测试文件共 254 项（`pyc` 已 gitignore） | ✅ |
+| `tests/` | 9 个测试文件共 302 项（2 skipped；`pyc` 已 gitignore） | ✅ |
 | `persona/` + `prompts/` | ★ 人设正文（xiaotun_v1.md）与签名/空间引导词权威源（v0.12.1） | ✅ |
 | `.github/workflows/ci.yml` | CI：3.11/3.12 矩阵 + 单测 + CLI 冒烟 | ✅ |
 | `pyproject.toml` / `.gitignore` | 包定义（setuptools，`src` 布局） | ✅ |
@@ -330,7 +343,7 @@ git archive --format=zip -o "$env:USERPROFILE\Downloads\small_fat_fish_v0.10.0.z
 6. **放插件**：拷 `astrbot-plugin-extra-brain`（+ 两个第三方插件）到 `data/plugins/` → 重启。
 7. **装 NapCat**（QQ 协议端）：release 直链下载，**版本避开 4.18.42**（见坑 2）；扫码登录。
 8. **改脚本路径**：`scripts\start-all.ps1` 里的 runtime / NapCat 路径改成对方机器实际路径。
-9. **自检**：`python -m unittest discover -s tests -v`（应 254 项 OK，1 skipped）→ 跑 §5 暗号三步法验证记忆链路 → 私聊机器人试改签名 / 发说说。
+9. **自检**：`python -m unittest discover -s tests -v`（应 302 项 OK，2 skipped）→ 跑 §5 暗号三步法验证记忆链路 → 私聊机器人试改签名 / 发说说。
 
 ### 10.4 交接必须叮嘱的三件事
 

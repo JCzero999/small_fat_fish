@@ -1,15 +1,17 @@
-# extra_brain 挂载规范（Mount Spec）v1.1
+# extra_brain 挂载规范（Mount Spec）v1.2
 
-> 本文档定义把 extra_brain 记忆库挂载到任意聊天宿主（AstrBot / DSH / 未来自研平台）的**通用契约**。
+> 本文档定义把 extra_brain 记忆库挂载到任意聊天宿主（AstrBot / DSH / Web Shell / 未来自研平台）的**通用契约**。
 > 核心原则：记忆库是产品，宿主是可替换的挂载点。换宿主 = 写一个新适配器（约 150 行），**永不返工记忆库**。
 > v1.1（2026-11-01）：适配 extra_brain v0.5.0。四项契约不变（向后兼容），新增可选契约见 §2.5。
+> v1.2（2026-11-07）：适配 v0.13.x。新增 **Chat Shell 作为一等宿主**（浏览器直连 `/v1/*`）；数据唯一真相源定为仓库 `extra-brain/`；
+> peer 文件名编码成为硬契约（与 Shell/插件必须一致）；新增可选契约「主人身份卡」（§2.5）。
 
 ## 1. 两个挂载面（都是一等公民）
 
 | 挂载面 | 适用宿主 | 接入方式 | 现状 |
 |---|---|---|---|
 | **Python API** | Python 宿主（AstrBot、MaiBot、自研 Python 平台） | `from extra_brain import ExtraBrain` 进程内直连 | ✅ `astrbot_plugin_extra_brain`（local 后端） |
-| **HTTP 协议** | 任意语言宿主（Node/Go/自研非 Python 平台） | `extra_brain.server` sidecar：`POST /inject` `/consolidate` `/forget`，`GET /health /core /list /stats` | ✅ `dsh-plugin-extra-brain`（JS 桥）已用；`astrbot_plugin_extra_brain`（http 后端）亦支持 |
+| **HTTP 协议** | 任意语言宿主（Node/Go/浏览器/自研非 Python 平台） | `extra_brain.server` sidecar：旧端点 `POST /inject` `/consolidate` `/forget`；v0.13 起 `POST /v1/chat` `/v1/consolidate` `/v1/inject_preview`、`GET /v1/health /v1/core /v1/stats`（Bearer token） | ✅ `dsh-plugin-extra-brain`（JS 桥）；✅ **Chat Shell（单文件网页，`/shell/`）**；✅ `astrbot_plugin_extra_brain`（http 后端） |
 
 sidecar 启动可选参数（v0.3.0+）：`--read-only`（拒绝一切写入，适合面板/doctor 挂载）、`--encryption-passphrase`（静态加密，也可用环境变量 `EXTRA_BRAIN_ENCRYPTION_PASSPHRASE`）。
 
@@ -53,6 +55,8 @@ sidecar 启动可选参数（v0.3.0+）：`--read-only`（拒绝一切写入，�
 | **主动开口** | `should_proactive_open(peer_id)` → `(bool, reason)`；`record_proactive_open(peer_id)` | 宿主定时器（cron）轮询；返回 `True` 时用 `reason`+检索记忆当**由头**让模型生成开场白，禁止直接吐台词；记录一次开口 |
 | **遗忘审批** | `forget(id)`（P1 墓碑，默认可自动）/ `forget(id, hard=True, approved=True)`（P0 物理删除） | 适配器**永不**自动传 `approved=True`；P0 必须由用户显式指令触发 |
 | **存储观测** | `storage_stats()` / `GET /stats` | 可选展示保留度档位分布、归档比例（`/memory status` 平替） |
+| **主人身份卡**（v0.13.2） | `set_owner_card(entries)` / `get_owner_card()`；HTTP：`POST /v1/set_owner` / `GET /v1/owner` | 把「谁是主人」写成 Core 条目（如 `主人QQ:1975824324\|称呼:JCzero\|关系:父女`）写入 `_global_companion.db`，所有 peer 合并注入、永远在场；**幂等**，宿主启动后同步一次即可。群聊场景还应给消息加 `[发言者 <账号>\|<昵称>]`，让抽取器把记忆绑定到人 |
+| **自动巩固策略下发**（v0.13.3） | `GET /v1/health` → `auto_consolidate{enabled,every_n_user_messages,on_new_session,on_page_hide,min_messages}` | 触发在宿主端（浏览器/客户端），服务端只给策略、不自己定时；宿主须提交**未巩固切片**而非全量，并在失败时降级（不阻塞对话） |
 
 ## 3. 适配器的「薄」标准
 
@@ -62,17 +66,19 @@ sidecar 启动可选参数（v0.3.0+）：`--read-only`（拒绝一切写入，�
 
 ## 4. 数据即资产
 
-- 换宿主 = 拷贝 `<data_dir>/` 下的 `.db` 文件（每库自包含：记忆+向量+审计）
+- **物理位置唯一**：本机所有宿主（AstrBot / Chat Shell / 未来抖音…）的 `data_dir` 一律指向仓库 `D:\projects\small_fat_fish\extra-brain\`（2026-11-07 起；旧 `astrbot-runtime\data\extra_brain\` 仅作备份）。换宿主只换挂载点，不搬数据
+- 换宿主 = 拷贝 `<data_dir>/` 下的 `.db` 文件（每库自包含：记忆+向量+审计）；除按 peer 拆分的库外，还有一个共享的 `_global_companion.db`（人设 / 关系 / 主人身份卡），**所有宿主必须用同名文件**，否则跨端人设不一致
 - schema 变更需提供迁移故事；`operation_log` 的 before/after 快照可支撑人工恢复
-- peer 文件名规则：安全字符化 + md5 短哈希（避免 `:` 等非法字符，跨平台一致）
+- peer 文件名规则（硬契约）：`_filename_for_peer(peer_id)` = 安全字符化（非 `[A-Za-z0-9_@.-]` → `_`，截断 64）+ `-` + md5(peer_id) 前 8 位；例如 `qq:FriendMessage:1975824324` → `qq_FriendMessage_1975824324-e46c8efb.db`。**任何新适配器必须逐字复刻**，否则打开的是另一个空库（Shell 与 AstrBot 插件即靠这条互通）
 - **v0.2–v0.5 新字段向后兼容、旧库零迁移**（新字段全部可选、缺省安全，建表 `IF NOT EXISTS`）
 - ⚠️ **加密与删除是资产级操作**：首次给已有库开加密、或执行 P0 物理删除前，必须先备份 `.db`（连同 `.db-wal` / `.db-shm` 边车文件）。P1 墓碑保留 digest 与审计，是唯一可自动执行的降档
+- ⚠️ **迁移/备份前先停进程**：AstrBot 或 sidecar 运行时库带 4MB 级 WAL，直接复制会拿到不一致快照；停服后再拷，拷完用 `PRAGMA integrity_check` + 逐表行数对比验收
 
 ## 5. 新宿主接入清单（约 1 小时）
 
 1. 找到宿主的三个钩子：LLM 请求前 / LLM 响应后 / 稳定会话标识（多数框架都有官方等价物）
 2. 选后端：Python 宿主 local（开发期把 `extra_brain_src_path` 指向仓库 `src/`，改代码重启即生效）；非 Python 用 http
-3. 实现 2.1–2.4 四项契约（抄现成参照）
+3. 实现 2.1–2.4 四项契约（抄现成参照）；按需接 §2.5 可选契约——**主人身份卡**（跨群/跨端认人）与**自动巩固策略下发**（客户端触发、切片提交）
 4. 验证：不可猜暗号三步法——会话 A 说「记住暗号 X」→ 巩固 → **新会话 B** 问「暗号是什么」，答对 = 注入+巩固+peer 稳定三链路全通
 5. 边界情况自测：无 key 只读、注入失败降级、巩固失败重试
 
@@ -80,7 +86,8 @@ sidecar 启动可选参数（v0.3.0+）：`--read-only`（拒绝一切写入，�
 
 | 宿主 | peer_id 来源 | 注入钩子 | 巩固钩子 | 适配器 |
 |---|---|---|---|---|
-| AstrBot + QQ（NapCat/OneBot v11） | `aiocqhttp:FriendMessage:<QQ号>` / `GroupMessage:<群号>`（天然稳定，零处理） | `@filter.on_llm_request()` | `@filter.on_llm_response()` + 阈值缓冲 | `astrbot-plugin-extra-brain/` ✅ **已验证（2026-11-01，QQ 私聊跨上下文暗号）** |
+| Chat Shell（浏览器，主场） | `SHELL_PEER_ID` / `shell.shell_peer_id`（本机设为 QQ 私聊 peer 以互通） | 自己在 `POST /v1/chat` 里调 `build_injection`（只读） | 前端按策略把未巩固切片 `POST /v1/consolidate` | `src/extra_brain/static/shell/index.html` ✅ **v0.13.3 已端到端验证** |
+| AstrBot + QQ（NapCat/OneBot v11） | `qq:FriendMessage:<QQ号>` / `qq:GroupMessage:<群号>`（天然稳定，零处理；旧版平台前缀可能是 `aiocqhttp`，以实际 UMO 为准） | `@filter.on_llm_request()` | `@filter.on_llm_response()` + 阈值缓冲 | `astrbot-plugin-extra-brain/` ✅ **已验证（2026-11-01，QQ 私聊跨上下文暗号）** |
 | AstrBot + WebChatUI | `webchat:FriendMessage:webchat!<user>!<conv>`（剥 conv 段） | 同上 | 同上 | 同上 ✅ 已验证（2026-10-31） |
 | DSH (Cordis) | `getOrCreateAnonymousUserId()` | `agent/pre-step` (step==1) | `session/event` 累计 + `turn/end` 冲刷 | `dsh-plugin-extra-brain/`（模块加载坑待修，见 HANDOVER 坑 4） |
 | 未来自研 | 自定（建议：登录用户 ID） | LLM 调用前拦截 | 响应完成后回调 | 照 §5 清单写 |

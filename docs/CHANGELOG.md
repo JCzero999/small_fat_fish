@@ -21,6 +21,7 @@
 - ✅ **服务端**：`/v1/health` 新增 `auto_consolidate` 策略对象；启动日志打印生效策略。API 契约不变
 - ✅ 测试：`tests/test_v133_features.py` 16 项新增（策略默认/覆盖/非法兜底、health 下发、静态页主路径无记忆按钮、高级面板能力、切片巩固、只读 503、默认不每轮巩固）；`scripts/shell_ui_smoke.js` 用 Node 跑真实前端 JS 验证触发时机（含失败路径）；全量 **302 项绿**（2 skipped）；版本号 `0.13.3`
 - ✅ 真实 Key 端到端：3 轮对话自动巩固（semantic 3 / episodic 1）→ 新会话未点任何记忆按钮即召回「下周三上午甲状腺复查」
+- ✅ **文档同步**：`SHELL_API.md` 把巩固契约改为「前端按策略提交切片、服务端不设定时器」，新增《前端自动巩固契约》与排查表；`README.md` 补「刷新=新会话」与 v0.7–v0.13 已实现清单；`MOUNT.md` 升 **v1.2**（Chat Shell 为一等宿主、数据唯一真相源、peer 文件名硬契约、主人卡/策略下发为可选契约）；`HANDOVER.md` 补坑 19–23、CI 计数与 v0.14 计划；插件 `README.md` 更新 `data_dir` / `companion_db` / `owner_accounts` 与 0.13.3 实测环境；`MEMORY_ITERATION_PLAN.md` 里程碑补齐至 v0.13.3
 
 ---
 
