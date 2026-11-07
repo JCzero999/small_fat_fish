@@ -158,6 +158,11 @@ class LocalBackend:
                         pass
             # v0.10.0: 从 user_config 覆盖 Identity 默认值
             identity_override = self._user_config.get("identity")
+            # v0.13.4：注入末尾【使用约定】开关（默认开，与 Shell 同源）
+            tone_cfg = self._user_config.get("tone")
+            usage_footer = True
+            if isinstance(tone_cfg, dict) and "memory_usage_footer" in tone_cfg:
+                usage_footer = bool(tone_cfg.get("memory_usage_footer"))
             brain = self._ExtraBrain(
                 self.data_dir / f"{_filename_for_peer(peer_id)}.db",
                 extractor=extractor,
@@ -165,6 +170,7 @@ class LocalBackend:
                 safety_rules=self._user_config.get("safety_rules"),
                 shadow_mode=bool(self._user_config.get("shadow_mode", False)),
                 honesty_footer=bool(self._user_config.get("honesty_footer", False)),
+                memory_usage_footer=usage_footer,
             )
             # 覆盖 Identity：在创建后写入 Core
             if identity_override:
@@ -624,10 +630,12 @@ class ExtraBrainPlugin(star.Star):
         parts = text.split("\n---\n", 1)
         if len(parts) == 2 and parts[0].lstrip().startswith("#"):
             text = parts[1].strip()
-        # 结构约定：正文从【你是谁】起（标题/说明头不注入）
-        anchor = text.find("【你是谁】")
-        if anchor > 0:
-            text = text[anchor:]
+        # 结构约定：正文从行首的【你是谁】起（标题/说明头不注入；
+        # 不能用 substrings，说明文字里可能提到这个锚点名）
+        for index, line in enumerate(text.splitlines()):
+            if line.strip().startswith("【你是谁】"):
+                text = "\n".join(text.splitlines()[index:]).strip()
+                break
         return text[:3000] if text else ""
 
     @property
@@ -728,8 +736,9 @@ class ExtraBrainPlugin(star.Star):
                     "你在主动开启一段对话，像惦记朋友一样自然提起，只输出要发送的那句话本身。",
                 )
                 # v0.12.1 T1：人设正文带上，主动开口的口吻也是小豚的（H4）
+                # v0.13.4：前置，避免通道模板话术压过人设
                 if self._persona_text:
-                    base_prompt = f"{base_prompt}\n\n{self._persona_text}"
+                    base_prompt = f"{self._persona_text}\n\n{base_prompt}"
                 resp = await self.context.llm_generate(
                     chat_provider_id=provider_id,
                     prompt=prompt_text,
@@ -772,15 +781,19 @@ class ExtraBrainPlugin(star.Star):
     # -- hook: 注入 + user 消息捕获 ----------------------------------------
 
     def _swap_persona(self, system_prompt: str | None) -> str:
-        """人设正文注入：追加到现有 system_prompt 末尾（幂等，已含则跳过）。
+        """人设正文注入：**前置**到 system_prompt，并声明优先级（幂等，已含则跳过）。
 
-        人设 md 首句「你是小豚…」声明优先于面板旧人格；回滚只需清空 persona_file 配置。
+        v0.12.1 原实现是追加到末尾，面板自带的通用助手人格会排在前面，
+        实际生成的语气容易被拉回「助手腔」。v0.13.4 改为前置：同一份人设正文
+        在 Shell 与 QQ 都是第一顺位，通道只保留极短的平台规则。
         """
-        current = system_prompt or ""
+        current = (system_prompt or "").strip()
         head = self._persona_text[:24]
         if head and head in current:
             return current
-        return f"{current}\n\n{self._persona_text}" if current else self._persona_text
+        if not current:
+            return self._persona_text
+        return f"{self._persona_text}\n\n{current}"
 
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):

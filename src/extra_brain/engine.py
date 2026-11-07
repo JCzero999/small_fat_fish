@@ -51,6 +51,13 @@ _HONESTY_LINE = (
     "【契约】下列为已检索记忆；未出现的经历不要当作共同回忆；工具结果以本轮返回为准。"
 )
 
+# v0.13.4：记忆使用约定 — 追加在注入产物最末尾。Shell / QQ / CLI 全部同源，
+# 目的是从规则层拆掉「汇报记忆」的口吻（记忆是材料，不是考题）。
+_MEMORY_USAGE_FOOTER = (
+    "【使用约定】以上为检索到的记忆材料。请按需取用，勿逐条汇报；"
+    "勿使用「我记着呢」等证明式套话；没有的信息请承认不确定。"
+)
+
 
 def _format_self_state_block(ss: SelfState, unresolved_count: int = 0) -> str:
     """把 SelfState 变成注入段落（v0.9.0: 含疲劳与未平复心结；v0.11.0: 目标带 deadline）。"""
@@ -113,11 +120,14 @@ class ExtraBrain:
         shadow_mode: bool | None = None,
         solidity: SolidityConfig | None = None,
         honesty_footer: bool = False,
+        memory_usage_footer: bool = True,
     ) -> None:
         self.config = config or MemoryConfig()
         self.read_only = bool(read_only)
         # v0.12.1 T4：诚实契约提示行（默认关，保证既有注入输出零变化）
         self._honesty_footer = bool(honesty_footer)
+        # v0.13.4：记忆使用约定脚注（默认开；文档 D2 要求两端统一）
+        self._memory_usage_footer = bool(memory_usage_footer)
         # v0.12.0：牢固度配置（默认启用；enabled=False 时行为与 v0.11 完全一致）
         self.solidity = solidity or SolidityConfig()
         self.embedder = embedder or LocalHashingEmbedder(self.config.embedding_dimensions)
@@ -160,6 +170,7 @@ class ExtraBrain:
                 encryption_passphrase=encryption_passphrase,
                 solidity=self.solidity,
                 honesty_footer=self._honesty_footer,
+                memory_usage_footer=self._memory_usage_footer,
             )
 
     @classmethod
@@ -441,6 +452,11 @@ class ExtraBrain:
         if self._honesty_footer:
             injection.context = (
                 _HONESTY_LINE + "\n\n" + injection.context
+            )
+        # v0.13.4: 记忆使用约定 — 注入产物最末尾（两端同源，默认开）
+        if self._memory_usage_footer:
+            injection.context = (
+                injection.context.rstrip() + "\n\n" + _MEMORY_USAGE_FOOTER
             )
         # Only memories that actually fit into the injected context count as activated.
         # 只读模式下跳过激活写入；激活按归属层拆分回写各自库。

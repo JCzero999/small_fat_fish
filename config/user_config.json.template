@@ -32,6 +32,12 @@
   "proactive": {
     "system_prompt": "你在主动开启一段对话，像惦记朋友一样自然提起，只输出要发送的那句话本身。"
   },
+  "tone": {
+    "_comment": "v0.13.4 语气约定：memory_usage_footer=注入末尾追加【使用约定】脚注（默认开，Shell/QQ 同源）；forbid_memory_flex/banned_phrases 供回归脚本检测证明式套话。",
+    "memory_usage_footer": true,
+    "forbid_memory_flex": true,
+    "banned_phrases": ["我记着呢", "我记得很清楚", "这个我还能记错", "我不会忘", "我怎么可能忘"]
+  },
   "shadow_mode": false,
   "shell": {
     "shell_enabled": true,

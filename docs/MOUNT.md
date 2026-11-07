@@ -62,6 +62,8 @@ sidecar 启动可选参数（v0.3.0+）：`--read-only`（拒绝一切写入，�
 
 - 只做钩子 → 契约的翻译；**禁止出现记忆库领域词汇**（importance/decay/embedding/conflict…那些属于 extra_brain 核心的词汇）
 - 领域操作全部通过后端接口：`inject / consolidate / core / list / search / stats / forget`
+- 宿主**不得自带长人设**：人设唯一源是 `persona/xiaotun_v1.md`（v0.13.4），适配器只负责把这份正文放到 system prompt 最前面；通道相关规则（群聊少回、平台格式）允许极短，但不得另写一套口吻
+- 注入一律走 `build_injection`，不要自行拼记忆正文——末尾的【使用约定】脚注（记忆是材料不是考题）由内核统一追加，绕过它就等于换了一套人格策略
 - 现成参照：`astrbot-plugin-extra-brain/main.py`（≈400 行含注释与指令）、`dsh-plugin-extra-brain/index.js`（≈150 行）
 
 ## 4. 数据即资产

@@ -53,6 +53,8 @@ QQ、Web Shell、将来的抖音等都只是**挂载点**，`data_dir` 一律指
 - **群聊发言者标注（v0.13.2）**：群消息在检索 query 与巩固缓冲里统一加 `[发言者 <QQ号>|<昵称>]`，抽取器能把记忆绑定到具体的人，模型也知道这句话是谁说的；私聊保持原文
 - **与 Shell 记忆互通（v0.13.1）**：插件 `data_dir` 与 Shell `--data-dir` 指向同一目录，且 Shell 的 `shell.shell_peer_id` 设为 `qq:FriendMessage:<QQ号>` 即可共用同一个库
 - **注入预算**：真实库默认注入已接近 1728/1800，记忆继续增长时调大 `token_limit` 或精简热记忆
+- **人设唯一源（v0.13.4）**：只认 `persona_file`（`persona/xiaotun_v1.md`），**前置**进 system prompt；面板里的旧人格排在后面，不再压过人设。不要再往面板里写第二份长人设
+- **记忆使用约定（v0.13.4）**：`build_injection` 末尾统一带【使用约定】脚注（勿逐条汇报 / 勿用「我记着呢」/ 不确定就承认），开关 `user_config.tone.memory_usage_footer`（默认 true）
 
 ## 指令
 
@@ -85,9 +87,10 @@ QQ 侧 peer 天然按 QQ 号隔离（本机 AstrBot 的 UMO 前缀是 `qq`：`qq
 ## 已验证环境
 
 - AstrBot 4.29.4（Python 3.12，conda env `astrbot`）
-- extra-brain **0.13.3**（editable 安装指向仓库 src/；适配器注入/巩固/指令链路自 v0.5 起零改动）
+- extra-brain **0.13.4**（editable 安装指向仓库 src/；适配器注入/巩固/指令链路自 v0.5 起零改动）
 - WebChatUI + QQ（NapCat Shell 4.18.41 / QQ NT 9.9.33-52230，机器人号 1178469499），DeepSeek `deepseek-flash` 对话 + 抽取
 - 2026-10-31 WebChatUI 跨会话暗号验证通过；2026-11-01 QQ 私聊跨上下文暗号验证通过（详见 `../docs/CHANGELOG.md`）
 - 2026-11-01 **v0.5.0 升级回归通过**：备份 → 重启 → 旧记忆零丢失（QQ 15 条）→ 新暗号四步验证 → 七因子分档在真实数据生效
 - 2026-11-07 **v0.13.1 互通验证**：插件与 Shell 指向同一 `extra-brain/` + 同一 QQ peer，Shell 只读注入 1709 tokens，QQ 侧记忆全召回
 - 2026-11-07 **v0.13.2 群聊识别验证**：`owner_accounts` 写入全局 Core，群消息带 `[发言者 …]` 标注后模型能指出是谁在说话
+- 2026-11-07 **v0.13.4 语气验证**：与 Shell 同读一份人设正文（前置）+ 注入脚注，五句语气回归无「我记着呢」类套话（Shell 侧已真实验证，QQ 侧按 `../scripts/persona_memory_tone_check.md` 手工记录）

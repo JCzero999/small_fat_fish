@@ -1,4 +1,4 @@
-# Chat Shell API 契约（v0.13.3）
+# Chat Shell API 契约（v0.13.4）
 
 服务：`python -m extra_brain.server --data-dir extra-brain`（默认 `127.0.0.1:8756`）。
 
@@ -23,7 +23,7 @@
 ```json
 {
   "ok": true,
-  "version": "0.13.3",
+  "version": "0.13.4",
   "peer_id": "local-main",
   "read_write": true,
   "data_dir": "D:\\projects\\small_fat_fish\\extra-brain",
@@ -59,6 +59,8 @@
 ```
 
 **只读**：走只读 brain 实例，不产生激活/加固/衰减写入。
+
+v0.13.4 起 `text` 末尾固定带 `【使用约定】…勿逐条汇报…` 脚注（`user_config.tone.memory_usage_footer` 可关）——这是「记忆是材料不是考题」的机器侧约束，两端同源。
 
 ---
 
@@ -127,7 +129,7 @@
 ```
 
 服务端逻辑：`auto_inject` 时用 `message` + 最近 5 轮 history 调 `build_injection`（只读）→
-system = 人设正文（`persona_file`，v0.12.1 同源）+ 注入文本 + 安全规范（`safety_rules`）→
+system = 人设正文（`persona_file`，全项目唯一源，放在**最前面**）+ 注入文本（末尾带【使用约定】脚注）+ 安全规范（`safety_rules`）→
 调现有 LLM 客户端（与 consolidate 同一套 api 配置：`user_config.api` → `DEEPSEEK_API_KEY`）。
 
 ```json

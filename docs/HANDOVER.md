@@ -1,7 +1,7 @@
 # 交接文档（Handover）
 
 > 给接手本仓库的人：这份文档说明「现在做到哪了、怎么跑起来、有哪些坑、下一步干什么」。
-> 最后更新：2026-11-07（**v0.13.3 Chat Shell 记忆交互改版**：主界面只聊天、系统自动巩固（攒满 N 条 / 开新会话 / 页面隐藏时冲刷未巩固切片），「预览注入」「记住以上对话」折叠进顶栏「高级」抽屉；策略经 `/v1/health` 下发，记忆语义零改动。此前 v0.13.2 主人身份跨端识别（`owner_accounts` 身份卡进全局 Core + 群聊发言者标注）、v0.13.1 记忆互通 + 数据架构统一（记忆唯一真相源 = 仓库 `extra-brain/`，宿主只是挂载点）、v0.13.0 主场迁移（独立 Chat Shell + Agent API）。302 项测试全绿。此前 v0.12.1 表达与人设层（A/B 真实验收与 H1–H6 人工验收仍在进行）；下一期 v0.14.0 方案 C 自主记账。主场契约见 `PRODUCT_NORTH.md` / `SHELL_API.md`）。
+> 最后更新：2026-11-07（**v0.13.4 统一人设 + 记忆使用规则**：唯一人设源（Shell/QQ 同读一份、均前置）、注入末尾统一【使用约定】脚注、人设新增【记忆怎么用】、插件剥离规则与 Shell 对齐；此前 **v0.13.3 Chat Shell 记忆交互改版**：主界面只聊天、系统自动巩固（攒满 N 条 / 开新会话 / 页面隐藏时冲刷未巩固切片），「预览注入」「记住以上对话」折叠进顶栏「高级」抽屉；策略经 `/v1/health` 下发，记忆语义零改动。此前 v0.13.2 主人身份跨端识别（`owner_accounts` 身份卡进全局 Core + 群聊发言者标注）、v0.13.1 记忆互通 + 数据架构统一（记忆唯一真相源 = 仓库 `extra-brain/`，宿主只是挂载点）、v0.13.0 主场迁移（独立 Chat Shell + Agent API）。316 项测试全绿。此前 v0.12.1 表达与人设层（A/B 真实验收与 H1–H6 人工验收仍在进行）；下一期 v0.14.0 方案 C 自主记账。主场契约见 `PRODUCT_NORTH.md` / `SHELL_API.md`）。
 
 ---
 
@@ -35,10 +35,10 @@
 
 | 部分 | 状态 |
 |------|------|
-| Python 记忆库 | ✅ **v0.13.3**：**Chat Shell 记忆交互改版——主路径只聊天，自动巩固（攒满 N 条用户消息 / 开新会话 / 页面隐藏时把未巩固切片 POST 到 `/v1/consolidate`，串行队列 + 失败节流），调试能力收进「高级」抽屉；`/v1/health` 下发策略，记忆语义零改动**。此前 v0.13.2 主人身份跨端识别（`owner_accounts` 身份卡写全局伴侣层 Core + 群聊 `[发言者 QQ|昵称]` 标注）、v0.13.1 记忆互通（peer 文件名/companion 库对齐插件）+ 数据架构统一（唯一真相源 = 仓库 `extra-brain/`）。主场迁移——**独立 Chat Shell（`/shell/` Web UI）+ Agent HTTP API（`/v1/chat|consolidate|inject_preview|health|core|stats`，Bearer token 鉴权，默认 peer `local-main`）**；更早累计 v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子 + v0.11.0 方案 A 生活感 + v0.12.0 方案 B FSRS 牢固度 + v0.12.1 表达与人设层。**302 项单测全绿**（2 skipped）+ `scripts/shell_ui_smoke.js` 前端状态机冒烟，真实 DeepSeek 无 GUI 回归（`scripts/shell_regression.py`）与自动巩固召回端到端通过 |
+| Python 记忆库 | ✅ **v0.13.4**：**统一人设与记忆使用规则——人设唯一源 `persona/xiaotun_v1.md`（新增【记忆怎么用】，禁止「我记着呢」式套话）、`build_injection` 末尾统一【使用约定】脚注、Shell/QQ 都把人设放在 system 首位；只改表达层，记忆语义零改动**。此前 v0.13.3：**Chat Shell 记忆交互改版——主路径只聊天，自动巩固（攒满 N 条用户消息 / 开新会话 / 页面隐藏时把未巩固切片 POST 到 `/v1/consolidate`，串行队列 + 失败节流），调试能力收进「高级」抽屉；`/v1/health` 下发策略，记忆语义零改动**。此前 v0.13.2 主人身份跨端识别（`owner_accounts` 身份卡写全局伴侣层 Core + 群聊 `[发言者 QQ|昵称]` 标注）、v0.13.1 记忆互通（peer 文件名/companion 库对齐插件）+ 数据架构统一（唯一真相源 = 仓库 `extra-brain/`）。主场迁移——**独立 Chat Shell（`/shell/` Web UI）+ Agent HTTP API（`/v1/chat|consolidate|inject_preview|health|core|stats`，Bearer token 鉴权，默认 peer `local-main`）**；更早累计 v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子 + v0.11.0 方案 A 生活感 + v0.12.0 方案 B FSRS 牢固度 + v0.12.1 表达与人设层。**316 项单测全绿**（2 skipped）+ `scripts/shell_ui_smoke.js` 前端状态机冒烟，真实 DeepSeek 无 GUI 回归（`scripts/shell_regression.py`）与自动巩固召回端到端通过 |
 | **Chat Shell（主场）** | ✅ **v0.13.3**（v0.13.0 起，v0.13.3 自动巩固）：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`；token 见 `SHELL_TOKEN` env 或 `config/user_config.json` 的 `shell.shell_token`（本机已设 `xtn-shell-local-1a2b3c4d`）；契约见 `docs/SHELL_API.md`；北极星见 `docs/PRODUCT_NORTH.md` |
 | sidecar（HTTP 服务） | ✅ 已落地并扩展：旧端点（`/inject` `/consolidate` `/stats` `/forget` `/shadow` `/freeze` `/decay` 等）保持不变（AstrBot http 后端兼容）；v0.13.0 新增 `/v1/*` 与静态 UI，`--no-shell` 可关闭 |
-| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 302 项单测 + CLI 冒烟 |
+| CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 316 项单测 + CLI 冒烟 |
 | **AstrBot 适配器** | ✅ **已端到端验证**：注入、巩固、peer 跨会话共享、`/memory` 指令、暗号验证通过（2026-10-31） |
 | **QQ 通道（NapCat + OneBot v11）** | ✅ **已端到端验证**：私聊按 QQ 号隔离记忆、`/reset` 后跨上下文答出暗号（2026-11-01） |
 | **v0.5.0 升级回归** | ✅ 2026-11-01：先备份 → 重启 → 旧记忆零丢失（QQ 15 条 + WebChat 1 条）→ 新暗号「金枪鱼-8866」四步验证通过；七因子分档在真实数据生效（高激活 P5 / 新写入 P4） |
@@ -67,7 +67,7 @@ small_fat_fish/
 ├── .github/workflows/ci.yml              # CI：3.11/3.12 + 302 测试 + CLI 冒烟
 ├── pyproject.toml                        # 包定义（无第三方依赖）
 ├── persona/
-│   └── xiaotun_v1.md                      # ★ 小豚人设正文 v1（v0.12.1，persona_file 指向）
+│   └── xiaotun_v1.md                      # ★ 全项目唯一人设源（v0.13.4 含【记忆怎么用】，persona_file 指向）
 ├── prompts/
 │   ├── signature_guide.md                 # ★ 签名/状态引导词权威源（同步 qqprofile_ex 配置）
 │   └── qzone_guide.md                     # ★ 空间说说/评论引导词权威源（同步 qzone 配置）
@@ -187,6 +187,8 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 **私聊人设同步到群聊**：`/memory sync-persona` → AstrBot 重启自动继承（`pull_persona_from_companion` 在 `_brain(peer_id)` 首次创建时自动调用，前提是 companion_db 已配置）。
 
+**语气回归（v0.13.4，两端各一遍）**：`python scripts/persona_tone_check.py --data-dir extra-brain` 跑五句（我是谁 / 作息 / 从未写入的冰岛雨伞 / 在干嘛 / 有点累），五句全 PASS 即合格（不出现「我记着呢」、不编、不列清单）；QQ 侧按 `scripts/persona_memory_tone_check.md` 手工发同样四句并记录。
+
 **Chat Shell**（2026-11-07 通过，v0.13.3 自动巩固主路径）：
 1. 仓库根跑 `python -m extra_brain.server --data-dir extra-brain`，浏览器打开 `http://127.0.0.1:8756/shell/`，粘贴启动日志里的 token
 2. 连续聊满 8 条用户消息（或攒几条后点「新会话」触发冲刷）——**全程不点任何记忆按钮**，状态行应闪现「记忆同步中…」→「已写入长期记忆」
@@ -224,14 +226,16 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 21. **localhost 会走系统代理**：`curl http://127.0.0.1:8756/...` 报 502 是代理拦的，加 `--noproxy '*'` 或改用 Python `urllib`；不要据此判断服务挂了。
 22. **网页对话不落盘**：Shell 的 `history` / 待巩固 `backlog` 只在页面内存，**刷新 = 新会话**（`pagehide` 尽力冲刷未巩固切片）。验证跨会话记忆请用「新会话」按钮，不要用 F5。
 23. **peer 文件名编码必须逐字一致**：`qq:FriendMessage:1975824324` → `qq_FriendMessage_1975824324-e46c8efb.db`（安全字符化 + md5 前 8 位，与插件 `_filename_for_peer` 一字不差）。Shell 或插件任一侧改了编码，就会各开一个空库——表现正是「网页里她不认识我」。核对 `/v1/health` 的 `peer_id` 与 `extra-brain/` 下真实文件名即可定位。
+24. **人设文件头会被注入（v0.13.4 已修）**：剥离函数原来只去 `#` 标题，文件头的 `>` 说明块（「结构按…规定」「硬上限…」）会被当成正文送进模型，而 QQ 插件从【你是谁】裁剪——两端 system prompt 不同，正是「两边气质分裂」的隐性来源。现在两端都按**行首** `【你是谁】` 裁剪；注意不能改成子串查找，说明文字里会提到这个锚点名。
+25. **注入脚注默认开**：`build_injection` 末尾的【使用约定】是 v0.13.4 的默认行为；写测试断言注入原文时要考虑它。要临时关闭：`ExtraBrain(memory_usage_footer=False)` 或 `user_config.tone.memory_usage_footer=false`。它追加在安全规范之后，是注入的最后一段。
 
 ---
 
 ## 7. 下一步（建议顺序）
 
-> v0.2→v0.5 的路线（`MEMORY_ITERATION_PLAN.md`）已全部落地；情感状态机与 /memory stats/forget 已接通（2026-11-01）；**v0.11.0 方案 A（生活感补全）与 v0.12.0 方案 B（FSRS 牢固度）均已落地（2026-11-04，249 项测试全绿）；v0.12.1 表达与人设层已落地（2026-11-05，254 项全绿）；v0.13.0–v0.13.3 主场迁移 + 记忆互通 + 主人身份卡 + 自动巩固已落地（2026-11-07，302 项全绿）**。以下是剩余收尾与下一期候选：
+> v0.2→v0.5 的路线（`MEMORY_ITERATION_PLAN.md`）已全部落地；情感状态机与 /memory stats/forget 已接通（2026-11-01）；**v0.11.0 方案 A（生活感补全）与 v0.12.0 方案 B（FSRS 牢固度）均已落地（2026-11-04，249 项测试全绿）；v0.12.1 表达与人设层已落地（2026-11-05，254 项全绿）；v0.13.0–v0.13.4 主场迁移 + 记忆互通 + 主人身份卡 + 自动巩固 + 统一人设已落地（2026-11-07，316 项全绿）**。以下是剩余收尾与下一期候选：
 
-0. **A/B 真实链路验收 + 表达层人工验收 H1–H6**：功能与 302 项单测已落地；QQ 说「明天提醒我XX」→ 到点主动开口、旧记忆久不提淡出自动注入但搜索仍能找到、「你是谁」自报小豚非助手腔、群内无关消息不条条回、签名/说说文案像人设——日常使用中观察确认（迭代方案 §3 表）。
+0. **A/B 真实链路验收 + 表达层人工验收 H1–H6**：功能与 316 项单测已落地；QQ 说「明天提醒我XX」→ 到点主动开口、旧记忆久不提淡出自动注入但搜索仍能找到、「你是谁」自报小豚非助手腔、群内无关消息不条条回、签名/说说文案像人设——日常使用中观察确认（迭代方案 §3 表）。
 1. **方案 C：自主记账（v0.14.0）**——巩固产出候选记忆，经模型/用户确认后再正式写入（`CandidateMemory` + `AutonomyConfig`，默认关）。任务清单在 `额外大脑 迭代函数级任务清单1104.md`（A+B 稳定跑 1–2 周后启动；v0.13.x 已被主场/互通/身份卡/记忆交互占用）。
 1. ~~**emotion_state 接进抽取链路**~~ ✅ 已落地：抽取 prompt 输出 `emotion_state`（新事件默认 open）与 `emotion_updates`（推进已有情节）；巩固侧状态机校验迁移（非法转换拒绝并记警告）；反漠视规则生效——未平复事件（open/acknowledged/attended 且带情绪）保底温层、永不自动归档、检索加权 +0.10 并豁免分数门槛。
 2. ~~**`/memory status` 展示保留度档位分布**~~ ✅ 已落地：`/memory stats`（档位分布/归档比例/库体积）；`/memory forget <id>`（P1 墓碑默认；P0 物理删除需 `--hard --yes` 双确认，适配器不会自动批准）。
@@ -309,7 +313,7 @@ D:\projects_software\astrbot-runtime\    ← 运行目录（含密钥/记忆库�
 | `config/` | ★ 只发 `user_config.json.template`（人设 / 10 条安全规范 / API / 主动开口模板） | ✅ 模板 |
 | `scripts/` | start-all / stop-all / status-all / watchdog / install-autostart 等 PowerShell | ✅ |
 | `docs/` | 架构规范 v0.9、README、MOUNT、MEMORY_ITERATION_PLAN、CHANGELOG、HANDOVER | ✅ |
-| `tests/` | 9 个测试文件共 302 项（2 skipped；`pyc` 已 gitignore） | ✅ |
+| `tests/` | 10 个测试文件共 316 项（2 skipped；`pyc` 已 gitignore） | ✅ |
 | `persona/` + `prompts/` | ★ 人设正文（xiaotun_v1.md）与签名/空间引导词权威源（v0.12.1） | ✅ |
 | `.github/workflows/ci.yml` | CI：3.11/3.12 矩阵 + 单测 + CLI 冒烟 | ✅ |
 | `pyproject.toml` / `.gitignore` | 包定义（setuptools，`src` 布局） | ✅ |
@@ -343,7 +347,7 @@ git archive --format=zip -o "$env:USERPROFILE\Downloads\small_fat_fish_v0.10.0.z
 6. **放插件**：拷 `astrbot-plugin-extra-brain`（+ 两个第三方插件）到 `data/plugins/` → 重启。
 7. **装 NapCat**（QQ 协议端）：release 直链下载，**版本避开 4.18.42**（见坑 2）；扫码登录。
 8. **改脚本路径**：`scripts\start-all.ps1` 里的 runtime / NapCat 路径改成对方机器实际路径。
-9. **自检**：`python -m unittest discover -s tests -v`（应 302 项 OK，2 skipped）→ 跑 §5 暗号三步法验证记忆链路 → 私聊机器人试改签名 / 发说说。
+9. **自检**：`python -m unittest discover -s tests -v`（应 316 项 OK，2 skipped）→ 跑 §5 暗号三步法验证记忆链路 → 私聊机器人试改签名 / 发说说。
 
 ### 10.4 交接必须叮嘱的三件事
 

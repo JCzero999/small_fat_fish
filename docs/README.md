@@ -1,6 +1,6 @@
 # Extra Brain（额外大脑）
 
-依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.13.3**（Chat Shell 记忆交互改版：默认自动巩固、手动能力降为高级调试；此前 v0.13.2 主人身份跨端识别、v0.13.0 独立 Chat 主场 + Agent API、v0.12.1 表达与人设层），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
+依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.13.4**（统一人设与记忆使用规则：唯一人设源 + 注入【使用约定】，消掉「汇报记忆」口吻；此前 v0.13.3 自动巩固改版、v0.13.2 主人身份跨端识别、v0.13.0 独立 Chat 主场 + Agent API、v0.12.1 表达与人设层），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
 
 > **文档索引**：设计规范见 `长期记忆「额外大脑」架构规范 v0.9.md`（第 10 节为实现对照）；DSH 宿主接入与跨会话验证见 `HANDOVER.md`；变更记录见 `CHANGELOG.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`；**AstrBot 挂载（QQ 通道）见 `../astrbot-plugin-extra-brain/README.md`；挂载到任意宿主的通用契约见 `MOUNT.md`；独立 Chat 主场契约见 `PRODUCT_NORTH.md` / `SHELL_API.md`；迭代路线图见 `MEMORY_ITERATION_PLAN.md`**。本文档位于 `docs/` 目录。
 
@@ -86,9 +86,10 @@ python -m extra_brain.server --data-dir extra-brain
 ### 启动后验证
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s tests   # 全量单测（v0.13.3：302 项）
+PYTHONPATH=src python -m unittest discover -s tests   # 全量单测（v0.13.4：316 项）
 python scripts/shell_regression.py                     # Shell 六步真实 LLM 闭环（无 Key 自动 SKIP）
 node scripts/shell_ui_smoke.js                         # 前端自动巩固状态机冒烟（无浏览器依赖）
+python scripts/persona_tone_check.py --static          # 人设唯一源 + 禁用套话静态检查（v0.13.4）
 curl http://127.0.0.1:8756/v1/health                   # Shell 存活检查（免鉴权，含自动巩固策略）
 .\scripts\status-all.ps1                               # QQ 链路三端口检查
 ```
@@ -183,14 +184,15 @@ curl http://127.0.0.1:8756/v1/health                   # Shell 存活检查（�
 ### v0.12.0–v0.12.1 牢固度与表达层
 
 - **FSRS 风格牢固度** `solidity.py`：`compute_retrievability` + `apply_review`（想起就加固）+ `batch_decay`（久不提自动冻结）；冻结 ≠ 删除，搜索仍可查；CLI `decay` / `freeze`，`/memory stats` 增牢度分布
-- **人设正文** `persona/xiaotun_v1.md`（`persona_file` 多 base 解析，缺省回退旧 `identity`）；**诚实契约行** `honesty_footer`；群聊规矩 `group_reply_mode`；签名 / 空间引导词；表情规范（文案级）
+- **人设正文** `persona/xiaotun_v1.md`（唯一人设源，`persona_file` 多 base 解析，缺省回退旧 `identity`）；**记忆使用规则**（v0.13.4：注入末尾【使用约定】脚注 + 人设【记忆怎么用】专节）；**诚实契约行** `honesty_footer`；群聊规矩 `group_reply_mode`；签名 / 空间引导词；表情规范（文案级）
 
-### v0.13.0–v0.13.3 独立主场（Chat Shell + Agent API）
+### v0.13.0–v0.13.4 独立主场与记忆使用规则
 
 - **v0.13.0**：`/v1/chat|consolidate|inject_preview|health|core|stats` + 单文件 Web UI（`/shell/`），Bearer token，默认只绑 `127.0.0.1`
 - **v0.13.1**：Shell 与 QQ 记忆互通（peer 文件名编码对齐插件、`_global_companion.db` 同名）；数据唯一真相源迁到仓库 `extra-brain/`
 - **v0.13.2**：主人身份卡 `identity.owner_accounts` 写全局伴侣层 Core（永远在场）+ 群聊 `[发言者 QQ|昵称]` 标注
 - **v0.13.3**：记忆交互改版——主路径只聊天，自动巩固（切片 / 新会话 / 页面隐藏），手动能力收进「高级」抽屉
+- **v0.13.4**：统一人设与记忆使用规则——Shell/QQ 同一份正文（前置），注入末尾统一【使用约定】，禁止「我记着呢」式套话，新增 `scripts/persona_tone_check.py` 回归
 
 运行时只使用 Python 标准库，不依赖外部向量服务；加密、HNSW、真实嵌入全部可选。
 
@@ -822,12 +824,17 @@ v0.3.0 起支持**四路召回** `search_four_paths(path=...)`：`A` 语义相�
 
 不动记忆内核的「像群友 / 像小豚」体验层，方案详见 `docs/小豚「表达与人设层」迭代方案V0.12.1.md`。
 
-### 人设正文（persona_file）
-- `persona/xiaotun_v1.md` 是权威源（800–1500 字，8 段结构：你是谁/关系/说话/记忆事实/工具承诺/群聊/主动关心/安全引用）。
-- 配置方式：`user_config.json` 设 `"persona_file": "persona/xiaotun_v1.md"`。适配器每轮把它追加到 system prompt（幂等），主动开口台词同样带上。文件缺失自动回退 `identity` 旧路径，不崩溃。
-- **修改人设**：直接编辑该 md（文末 `<!-- -->` 注释区不会注入）；runtime 侧需要把文件拷到运行目录同名相对路径（或写绝对路径）。
+### 人设正文（persona_file，全项目唯一源）
+- `persona/xiaotun_v1.md` 是**全项目唯一人设源**（Chat Shell / QQ / 将来的宿主都读这一份），正文约 1360 字，9 段结构：你是谁/关系/说话/记忆事实/**记忆怎么用**/工具承诺/群聊/主动关心/安全引用。
+- 配置方式：`user_config.json` 设 `"persona_file": "persona/xiaotun_v1.md"`。两端都按同一规则剥离标题、说明块与 `<!-- -->` 注释区，正文从行首的【你是谁】起算；Shell 与 QQ 都把它放在 system prompt **最前面**（v0.13.4 起，通道模板话术排在后面），主动开口台词同样带上。文件缺失自动回退 `identity` 旧路径，不崩溃。
+- **修改人设**：直接编辑该 md（标题/说明/注释不注入）；runtime 侧需要把文件拷到运行目录同名相对路径（或写绝对路径）。
 - 回滚：清空 `persona_file` 即回到纯 identity 人格，无需动记忆库。
-- 字数硬上限 3000（超出截断）；上线实测：人设 ~1079 tokens + 注入 ≤1800，在预算内。
+- 字数硬上限 3000（超出截断），建议 ≤1500；上线实测：人设 + 注入在 `injection_token_limit`(1800) 预算内。
+
+### 记忆使用规则（v0.13.4：记忆是材料，不是考题）
+- **人设侧**：`【记忆怎么用】` 明确「用得上才提、不主动罗列、禁止证明式套话、不确定就承认、不汇报同步状态」。
+- **注入侧**：`build_injection` 产物**最末尾**统一追加 `【使用约定】以上为检索到的记忆材料。请按需取用，勿逐条汇报；勿使用「我记着呢」等证明式套话；没有的信息请承认不确定。`（Shell / QQ / CLI 同源；`ExtraBrain(memory_usage_footer=False)` 或 `user_config.tone.memory_usage_footer=false` 可关）
+- **回归**：`python scripts/persona_tone_check.py --static` 查人设与禁用词；带 Key 时 `--data-dir extra-brain` 用真实模型跑五句（我是谁 / 作息 / 未写入之事 / 闲聊两句）。QQ 侧按 `scripts/persona_memory_tone_check.md` 手工记录。
 
 ### 诚实契约行（honesty_footer）
 - `"honesty_footer": true` 时注入首部加一行：`【契约】下列为已检索记忆；未出现的经历不要当作共同回忆；工具结果以本轮返回为准。`（引擎默认关=输出零变化）
@@ -923,7 +930,7 @@ DSH 是 Developer Preview；AstrBot 为活跃维护的成熟框架（支持 QQ �
 
 ## 验证边界
 
-- **离线单测 302 项**（基础 / sidecar / v0.2–v0.13 各期特性：v2 全量、v11 53、v12 36、v121 5、v13 22、v132 10、v133 16 等）：数据校验、持久化、空抽取与闲聊过滤、去重、冲突修正、七因子保留度与归档、保护与晋升、事务回滚、加权检索与四路召回、注入预算、跨会话情绪召回、人格锚回滚、感觉/工作记忆、只读模式、存储统计、陪伴层五表 CRUD、主动开口决策矩阵、加密密文断言、HNSW 召回、遗忘链路（P1/P0）、情感事件状态机集成（默认 open / 显式推进 / 非法迁移拒绝 / 反漠视不归档 / schema 校验）、sidecar HTTP（per-peer 隔离、错误码、只读降级、/stats、/forget）。Python 3.11/3.12 双版本 CI 全绿（GitHub Actions）。
+- **离线单测 316 项**（基础 / sidecar / v0.2–v0.13 各期特性：v2 全量、v11 53、v12 36、v121 5、v13 22、v132 10、v133 16 等）：数据校验、持久化、空抽取与闲聊过滤、去重、冲突修正、七因子保留度与归档、保护与晋升、事务回滚、加权检索与四路召回、注入预算、跨会话情绪召回、人格锚回滚、感觉/工作记忆、只读模式、存储统计、陪伴层五表 CRUD、主动开口决策矩阵、加密密文断言、HNSW 召回、遗忘链路（P1/P0）、情感事件状态机集成（默认 open / 显式推进 / 非法迁移拒绝 / 反漠视不归档 / schema 校验）、sidecar HTTP（per-peer 隔离、错误码、只读降级、/stats、/forget）。Python 3.11/3.12 双版本 CI 全绿（GitHub Actions）。
 - **向后兼容**：v0.5.0 代码以只读方式完整加载 AstrBot 运行期的旧 `.db`（QQ 15 条 + WebChat 1 条）验证通过，新字段全部缺省安全，无需迁移。
 - **端到端**：AstrBot + WebChatUI 跨会话暗号、AstrBot + QQ 跨上下文暗号均验证通过；v0.5.0 重启后在真实 QQ 库上「新增暗号写入 + 跨 reset 召回 + 旧记忆零丢失」四步回归通过，七因子分档在真实数据上生效（高激活记忆落 P5，新写入落 P4）。
 

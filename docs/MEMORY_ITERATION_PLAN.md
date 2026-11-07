@@ -2,7 +2,7 @@
 
 > 记忆库从 extra_brain v0.1.0 向生产级可迁移记忆系统演进的架构路线图。  
 > 参考项目：[Rain13Sad/bcf-mnemovault](https://github.com/Rain13Sad/bcf-mnemovault)（DSH 长期记忆与情感插件包族）。  
-> 文档版本：v1.4（2026-11-07 更新：v0.2–v0.5 主线全部落地；v0.6–v0.13 里程碑见 §7 与 `CHANGELOG.md`。当前 **v0.13.3**：独立 Chat Shell 主场 + `/v1` Agent API + Shell/QQ 记忆互通 + 主人身份卡 + 自动巩固。**302 项单测全绿**（2 skipped）+ CI + 前端状态机冒烟 + 真实 LLM 回归）  
+> 文档版本：v1.4（2026-11-07 更新：v0.2–v0.5 主线全部落地；v0.6–v0.13 里程碑见 §7 与 `CHANGELOG.md`。当前 **v0.13.4**：独立 Chat Shell 主场 + `/v1` Agent API + 记忆互通 + 主人身份卡 + 自动巩固 + 统一人设与记忆使用规则。**316 项单测全绿**（2 skipped）+ CI + 前端状态机冒烟 + 真实 LLM 回归）  
 > 适用范围：src/extra_brain 核心库 + astrbot-plugin-extra-brain 适配器 + dsh-plugin-extra-brain 适配器（搁置中）
 
 > **✅ 落地状态总览**（明细见各版本节与 `CHANGELOG.md`）
@@ -343,7 +343,7 @@ class CoreMemory:
 
 ## 7. 下一期候选（2026-11-07 更新）
 
-> 本文件是 v0.2→v0.5 的主线路线图，已全部落地；**v0.6–v0.13 的后续迭代不在本文件展开，以 `CHANGELOG.md` 为准**。已完成里程碑：v0.6.0 情感状态机接通 + 主动开口上线 / v0.7.0 SelfState / v0.8.0 DispositionSeed / v0.9.0 疲劳完整化 + 人生快照 / v0.10.0 user_config + 10 条安全规范 / v0.11.0 生活感补全 / v0.12.0 FSRS 牢固度 / v0.12.1 表达与人设层 / v0.13.0 独立 Chat Shell + Agent API / v0.13.1 记忆互通 + 数据架构统一 / v0.13.2 主人身份卡 / v0.13.3 自动巩固改版。剩余候选：
+> 本文件是 v0.2→v0.5 的主线路线图，已全部落地；**v0.6–v0.13 的后续迭代不在本文件展开，以 `CHANGELOG.md` 为准**。已完成里程碑：v0.6.0 情感状态机接通 + 主动开口上线 / v0.7.0 SelfState / v0.8.0 DispositionSeed / v0.9.0 疲劳完整化 + 人生快照 / v0.10.0 user_config + 10 条安全规范 / v0.11.0 生活感补全 / v0.12.0 FSRS 牢固度 / v0.12.1 表达与人设层 / v0.13.0 独立 Chat Shell + Agent API / v0.13.1 记忆互通 + 数据架构统一 / v0.13.2 主人身份卡 / v0.13.3 自动巩固改版 / v0.13.4 统一人设 + 记忆使用规则（唯一源 + 【使用约定】脚注）。剩余候选：
 
 1. **方案 C：自主记账（v0.14.0）**：巩固产出候选记忆，经模型/用户确认后再正式写入（`CandidateMemory` + `AutonomyConfig`，默认关）。函数级清单见 `额外大脑 迭代函数级任务清单1104.md`
 2. **用户图式自动抽象**：离线巩固从散落情感反应自动产出 `UserSchema`（建议真实数据积累一两周后做）
@@ -351,10 +351,10 @@ class CoreMemory:
 4. **群聊场景实测**：多人共享群库时的发言者归属与记忆边界（v0.13.2 已提供 `[发言者 …]` 标注）
 5. 可选：真实 tokenizer 预算、http 后端多宿主共享部署、Shell 深色主题、AstrBot 主动开口与 Shell 统一调度
 
-验收纪律：`python -m unittest discover -s tests`（当前 **302 项全绿**，2 skipped）+ `node scripts/shell_ui_smoke.js` + `python scripts/shell_regression.py`（真实 Key）；改数据结构前先备份 `extra-brain/`（含 WAL 边车），并在 QQ 侧重跑一次暗号验证确保不回退。
+验收纪律：`python -m unittest discover -s tests`（当前 **316 项全绿**，2 skipped）+ `node scripts/shell_ui_smoke.js` + `python scripts/shell_regression.py`（真实 Key）；改数据结构前先备份 `extra-brain/`（含 WAL 边车），并在 QQ 侧重跑一次暗号验证确保不回退。
 
 ---
 
 *文档维护：extra_brain 核心库维护团队  
-最后更新：2026-11-07（补充 v0.6–v0.13 里程碑；当前版本 v0.13.3，测试 302 项）  
-适用版本：extra_brain v0.1.0 → v0.13.3（当前）→ v0.14.0 方案 C（待启动）
+最后更新：2026-11-07（补充 v0.6–v0.13 里程碑；当前版本 v0.13.4，测试 316 项）  
+适用版本：extra_brain v0.1.0 → v0.13.4（当前）→ v0.14.0 方案 C（待启动）

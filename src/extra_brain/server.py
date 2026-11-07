@@ -57,6 +57,8 @@ from .models import MemoryValidationError, parse_iso8601
 
 _SHELL_STATIC_DIR = Path(__file__).resolve().parent / "static" / "shell"
 _PERSONA_MAX_CHARS = 3000
+# v0.13.4：正文结构锚点（与 AstrBot 适配器一致，锚点之前的写作说明不注入）
+_PERSONA_ANCHOR = "【你是谁】"
 
 
 def _filename_for_peer(peer_id: str) -> str:
@@ -71,7 +73,12 @@ def _filename_for_peer(peer_id: str) -> str:
 
 
 def _strip_persona_markdown(text: str) -> str:
-    """v0.12.1 与 AstrBot 适配器同规则：剥标题头与 <!-- 注释区 -->。"""
+    """v0.12.1 与 AstrBot 适配器同规则：剥标题头、说明块与 <!-- 注释区 -->。
+
+    v0.13.4：与插件对齐——正文从第一个结构锚点（【你是谁】）起算。
+    此前 Shell 会把文件头的写作说明（「结构按…规定」「硬上限…」）一并注入，
+    而 QQ 侧从【你是谁】裁剪，造成两端 system prompt 不一致（人设分裂的隐性来源）。
+    """
     lines: list[str] = []
     in_comment = False
     for line in text.splitlines():
@@ -87,6 +94,12 @@ def _strip_persona_markdown(text: str) -> str:
             continue  # 标题头不注入
         lines.append(line)
     cleaned = "\n".join(lines).strip()
+    # 只认「行首」锚点：说明里可能提到锚点名，不能当成正文起点
+    body_lines = cleaned.splitlines()
+    for index, line in enumerate(body_lines):
+        if line.strip().startswith(_PERSONA_ANCHOR):
+            cleaned = "\n".join(body_lines[index:]).strip()
+            break
     if len(cleaned) > _PERSONA_MAX_CHARS:
         cleaned = cleaned[:_PERSONA_MAX_CHARS]
     return cleaned
@@ -278,6 +291,14 @@ class ExtraBrainServer:
             self._safety_rules = [str(r) for r in rules] if isinstance(rules, list) else []
         return self._safety_rules
 
+    @property
+    def memory_usage_footer(self) -> bool:
+        """v0.13.4：注入末尾【使用约定】开关（user_config.tone.memory_usage_footer，默认开）。"""
+        tone = self.user_config.get("tone")
+        if isinstance(tone, dict) and "memory_usage_footer" in tone:
+            return bool(tone.get("memory_usage_footer"))
+        return True
+
     def _load_persona_text(self) -> str:
         cfg = self.user_config
         config_dir = self.user_config_path.parent if self.user_config_path else None
@@ -307,6 +328,7 @@ class ExtraBrainServer:
                     read_only=True,
                     encryption_passphrase=self.encryption_passphrase,
                     companion_db=self.companion_db,
+                    memory_usage_footer=self.memory_usage_footer,
                 )
                 self._preview_brains[peer_id] = brain
             return brain
@@ -361,6 +383,7 @@ class ExtraBrainServer:
                     read_only=self.read_only,
                     encryption_passphrase=self.encryption_passphrase,
                     companion_db=self.companion_db,
+                    memory_usage_footer=self.memory_usage_footer,
                 )
                 self._brains[peer_id] = brain
             return brain
