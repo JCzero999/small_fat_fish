@@ -7,7 +7,7 @@
 
 ## 1. 项目是什么
 
-「额外大脑」（extra_brain）：给陪伴型 Agent 加一套**跨会话长期记忆**。核心理念不是「存下所有聊天」，而是**少量、高相关、可解释、可遗忘**，让模型在任意新上下文里仍能维持连续的身份、关系与「被记住的感觉」。**当前 v0.12.1**。
+「额外大脑」（extra_brain）：给陪伴型 Agent 加一套**跨会话长期记忆**。核心理念不是「存下所有聊天」，而是**少量、高相关、可解释、可遗忘**，让模型在任意新上下文里仍能维持连续的身份、关系与「被记住的感觉」。**当前 v0.13.4**。
 
 完整规格见 `长期记忆「额外大脑」架构规范 v0.9.md`；Python 库用法见 `README.md`；**迭代路线图见 `MEMORY_ITERATION_PLAN.md`（v0.2–v0.5 已全部落地）**；**挂载到任意宿主的通用契约见 `MOUNT.md`**；AstrBot 插件细节见 `../astrbot-plugin-extra-brain/README.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`。本文档位于 `docs/` 目录。
 
@@ -36,7 +36,7 @@
 | 部分 | 状态 |
 |------|------|
 | Python 记忆库 | ✅ **v0.13.4**：**统一人设与记忆使用规则——人设唯一源 `persona/xiaotun_v1.md`（新增【记忆怎么用】，禁止「我记着呢」式套话）、`build_injection` 末尾统一【使用约定】脚注、Shell/QQ 都把人设放在 system 首位；只改表达层，记忆语义零改动**。此前 v0.13.3：**Chat Shell 记忆交互改版——主路径只聊天，自动巩固（攒满 N 条用户消息 / 开新会话 / 页面隐藏时把未巩固切片 POST 到 `/v1/consolidate`，串行队列 + 失败节流），调试能力收进「高级」抽屉；`/v1/health` 下发策略，记忆语义零改动**。此前 v0.13.2 主人身份跨端识别（`owner_accounts` 身份卡写全局伴侣层 Core + 群聊 `[发言者 QQ|昵称]` 标注）、v0.13.1 记忆互通（peer 文件名/companion 库对齐插件）+ 数据架构统一（唯一真相源 = 仓库 `extra-brain/`）。主场迁移——**独立 Chat Shell（`/shell/` Web UI）+ Agent HTTP API（`/v1/chat|consolidate|inject_preview|health|core|stats`，Bearer token 鉴权，默认 peer `local-main`）**；更早累计 v0.8.0 DispositionSeed + v0.9.0 疲劳完整化（多因素 energy/fatigue_reason/临界行为）+ 未平复优先 + 人生快照 + 主动开口决策重构。 + 双时态版本链 + 人格锚 + 情感五态（状态机已接通抽取→巩固→检索，含反漠视规则与情感记忆保护 flags）+ 感觉/工作记忆（含启动效应）+ 七因子保留度六档处置 + 四路召回 + 只读模式 + 存储统计 + 陪伴层（关系/图式/叙事/联想/主动开口已接宿主定时器）+ HNSW + 静态加密 + P0/P1 遗忘审批 + SelfState 自我状态机 + DispositionSeed 倾向种子 + v0.11.0 方案 A 生活感 + v0.12.0 方案 B FSRS 牢固度 + v0.12.1 表达与人设层。**316 项单测全绿**（2 skipped）+ `scripts/shell_ui_smoke.js` 前端状态机冒烟，真实 DeepSeek 无 GUI 回归（`scripts/shell_regression.py`）与自动巩固召回端到端通过 |
-| **Chat Shell（主场）** | ✅ **v0.13.3**（v0.13.0 起，v0.13.3 自动巩固）：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`；token 见 `SHELL_TOKEN` env 或 `config/user_config.json` 的 `shell.shell_token`（本机已设 `xtn-shell-local-1a2b3c4d`）；契约见 `docs/SHELL_API.md`；北极星见 `docs/PRODUCT_NORTH.md` |
+| **Chat Shell（主场）** | ✅ **v0.13.4**（v0.13.0 起，v0.13.3 自动巩固，v0.13.4 人设前置 + 【使用约定】脚注）：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`；token 见 `SHELL_TOKEN` env 或 `config/user_config.json` 的 `shell.shell_token`（本机已设 `xtn-shell-local-1a2b3c4d`）；契约见 `docs/SHELL_API.md`；北极星见 `docs/PRODUCT_NORTH.md` |
 | sidecar（HTTP 服务） | ✅ 已落地并扩展：旧端点（`/inject` `/consolidate` `/stats` `/forget` `/shadow` `/freeze` `/decay` 等）保持不变（AstrBot http 后端兼容）；v0.13.0 新增 `/v1/*` 与静态 UI，`--no-shell` 可关闭 |
 | CI | ✅ GitHub Actions（`.github/workflows/ci.yml`）：3.11/3.12 矩阵 + 316 项单测 + CLI 冒烟 |
 | **AstrBot 适配器** | ✅ **已端到端验证**：注入、巩固、peer 跨会话共享、`/memory` 指令、暗号验证通过（2026-10-31） |
@@ -46,7 +46,7 @@
 | DSH 适配器 | ⛔ 插件模块加载失败（根因已定位见坑 4，**已被 AstrBot 路线取代，暂搁置**） |
 | 定时/消息阈值自动巩固 | ✅ 阈值触发已实现（AstrBot 适配器内）；**主动开口循环已上线运行**（proactive_enabled=true，20 分钟/30%概率/每日≤5/22–8 免打扰） |
 
-**一句话**：记忆库 v0.13.3（…v0.12.1 表达与人设层 → v0.13.0 主场迁移（独立 Chat Shell + /v1 Agent API）→ v0.13.1 记忆互通 + 数据架构统一 → v0.13.2 主人身份跨端识别 → **v0.13.3 记忆交互改版：主路径只聊天，系统自动巩固（切片 + 新会话/页面隐藏冲刷），调试能力收进「高级」抽屉**，302 项测试全绿 + 前端状态机冒烟 + 真实 LLM 自动巩固召回通过）→ AstrBot → QQ 全链路此前已跑通且不受影响；机器人 QQ 号 `1178469499`（Startup 看门狗托管）。**不打开 QQ：在仓库根跑 `python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`（与 QQ 记忆互通）。**
+**一句话**：记忆库 v0.13.4（…v0.12.1 表达与人设层 → v0.13.0 主场迁移（独立 Chat Shell + /v1 Agent API）→ v0.13.1 记忆互通 + 数据架构统一 → v0.13.2 主人身份跨端识别 → v0.13.3 记忆交互改版（主路径只聊天，系统自动巩固；调试能力收进「高级」抽屉）→ **v0.13.4 统一人设与记忆使用规则：唯一人设源两端前置 + 注入【使用约定】脚注，拆掉汇报感**，316 项测试全绿 + 前端状态机冒烟 + 真实 LLM 自动巩固召回与五句语气回归通过）→ AstrBot → QQ 全链路此前已跑通且不受影响；机器人 QQ 号 `1178469499`（Startup 看门狗托管）。**不打开 QQ：在仓库根跑 `python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`（与 QQ 记忆互通）。**
 
 ---
 
@@ -64,7 +64,7 @@ small_fat_fish/
 │   ├── 小豚「表达与人设层」迭代方案V0.12.1.md # ★ 表达层方案（persona/引导词/群聊/诚实契约）
 │   ├── CHANGELOG.md                       # 变更记录
 │   └── HANDOVER.md                        # 本文档
-├── .github/workflows/ci.yml              # CI：3.11/3.12 + 302 测试 + CLI 冒烟
+├── .github/workflows/ci.yml              # CI：3.11/3.12 + 316 测试 + CLI 冒烟
 ├── pyproject.toml                        # 包定义（无第三方依赖）
 ├── persona/
 │   └── xiaotun_v1.md                      # ★ 全项目唯一人设源（v0.13.4 含【记忆怎么用】，persona_file 指向）
@@ -86,7 +86,7 @@ small_fat_fish/
 │   ├── _conf_schema.json                 # WebUI 配置面板 schema
 │   └── README.md
 ├── dsh-plugin-extra-brain/               # DSH 适配器（暂搁置，加载坑见 §6 坑 4）
-└── tests/                                # 302 项测试（…+ test_v13_features 22 + test_v132_features 10 + test_v133_features 16）
+└── tests/                                # 316 项测试（…+ test_v13_features 22 + test_v132_features 10 + test_v133_features 16 + test_v134_features 14）
 
 * test_v2_features 覆盖 v0.2–v0.5 全部新特性 + 情感状态机集成链路（双时态/人格锚/保留度/四路召回/陪伴层/加密/HNSW/遗忘链/emotion_state）。
 ```
@@ -254,7 +254,7 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 
 ## 8. 交接要点速查
 
-- **跑测试**：`python -m unittest discover -s tests -v`（应 276/276 OK，2 skipped；3.11/3.12 均可）
+- **跑测试**：`python -m unittest discover -s tests -v`（应 316 项 OK，2 skipped；3.11/3.12 均可）
 - **独立主场（v0.13）**：`python -m extra_brain.server --data-dir extra-brain` → `http://127.0.0.1:8756/shell/`（token：`SHELL_TOKEN` env / `config/user_config.json` 的 `shell.shell_token`；无 GUI 回归 `python scripts/shell_regression.py`，退出码 0/1）
 - **启动全部（QQ）**：`.\scripts\start-all.ps1`（工作目录：仓库根；顺带拉起 AstrBot + NapCat，内置端口占用检查。等价手动命令：conda env `astrbot` 下 `astrbot.exe run`，工作目录 `D:\projects_software\astrbot-runtime`）
 - **停止全部**：`.\scripts\stop-all.ps1`；若中断（曾遇 exit -1）用 `Get-Process | ? {$_.ProcessName -in 'python','astrbot','QQ','NapCatWinBootMain'} | Stop-Process -Force` 兜底，再确认三端口清空

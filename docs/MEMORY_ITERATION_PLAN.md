@@ -235,7 +235,7 @@ v0.5.0: 真实 embedding + HNSW + 静态加密 + CI 自动化（生产级）
 - ✅ 1000+ cell 时召回延迟不显著劣化（纯标准库 `HNSWIndex`，`VectorIndex` ≥2000 自动切换；小库精确扫描、HNSW 召回单测通过）
 - ✅ 数据库文件可加密，未授权进程无法直接读取明文（PBKDF2 口令派生 + 全表透明加解密，磁盘密文断言单测通过；XOR 混淆级，生产建议叠加文件系统加密）
 - ✅ `forget --hard` 需要显式确认，否则拒绝执行（`--yes` / `approved=True` 双保险；P1 墓碑默认，digest 入审计）
-- ✅ CI 在每次 push 时自动跑单测（GitHub Actions 3.11/3.12 矩阵 + 302 项单测 + CLI 冒烟）。端到端暗号验证与 storage_ratio 断言属于人工/集成环节，离线 CI 不访问外部服务与 LLM，故未纳入自动门禁
+- ✅ CI 在每次 push 时自动跑单测（GitHub Actions 3.11/3.12 矩阵 + 316 项单测 + CLI 冒烟）。端到端暗号验证与 storage_ratio 断言属于人工/集成环节，离线 CI 不访问外部服务与 LLM，故未纳入自动门禁
 
 ---
 
