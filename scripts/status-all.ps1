@@ -1,11 +1,11 @@
-# Status-all: show AstrBot + NapCat running status.
+# Status-all: show Chat Shell + AstrBot + NapCat running status.
 # Lists listening ports, related processes, and memory DB files.
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 chcp 65001 | Out-Null
 
 Write-Host '=== Listening Ports ===' -ForegroundColor Cyan
-foreach ($p in @(6185, 6199, 6099)) {
+foreach ($p in @(8756, 6185, 6199, 6099)) {
     $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue
     if ($conns) {
         foreach ($c in $conns) {
@@ -33,5 +33,7 @@ if (Test-Path $memDir) {
 
 Write-Host '' -ForegroundColor Cyan
 Write-Host '=== Quick Actions ===' -ForegroundColor Cyan
-Write-Host '  Start all : .\scripts\start-all.ps1 [QQ number]'
-Write-Host '  Stop all  : .\scripts\stop-all.ps1'
+Write-Host '  Start all  : .\scripts\start-all.ps1 [QQ number]   (AstrBot + NapCat)'
+Write-Host '  Start web  : python -m extra_brain.server --data-dir extra-brain   (port 8756)'
+Write-Host '  Restart    : .\scripts\restart-all.ps1             (Shell + AstrBot + NapCat)'
+Write-Host '  Stop all   : .\scripts\stop-all.ps1'

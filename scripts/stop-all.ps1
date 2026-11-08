@@ -1,53 +1,50 @@
-# Stop-all: stop AstrBot + NapCat + QQ.
-# Run once to stop both processes with port-conflict idempotency protection.
+# Stop-all: stop Chat Shell + AstrBot + NapCat/QQ.
+# Idempotent: ports already free are reported and skipped.
+#
+# Bug fixed 2026-11-08: the old version assigned to `$pid`, which is a read-only
+# PowerShell automatic variable. That assignment threw a terminating error and
+# aborted the script before a single Stop-Process ran - so "stop-all" silently
+# left AstrBot/NapCat alive, and start-all's port check then skipped the restart,
+# leaving stale code running after a "restart".
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'SilentlyContinue'
 
 chcp 65001 | Out-Null
 
-# Stop AstrBot (port 6185)
-$astrbotPort = 6185
-$listening = Get-NetTCPConnection -LocalPort $astrbotPort -State Listen -ErrorAction SilentlyContinue
-if ($listening) {
-    foreach ($c in $listening) {
-        $pid = $c.OwningProcess
-        Write-Host "[AstrBot] Found process listening on port $astrbotPort, PID=$pid, stopping..." -ForegroundColor Yellow
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+function Stop-ByPort {
+    param([int]$Port, [string]$Name)
+    $conns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if (-not $conns) {
+        Write-Host "[$Name] No process found listening on port $Port, may already be stopped." -ForegroundColor Cyan
+        return
+    }
+    foreach ($c in $conns) {
+        $ownerPid = $c.OwningProcess
+        Write-Host "[$Name] Found process listening on port $Port, PID=$ownerPid, stopping..." -ForegroundColor Yellow
+        Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Seconds 2
-    $still = Get-NetTCPConnection -LocalPort $astrbotPort -State Listen -ErrorAction SilentlyContinue
-    if ($still) {
-        Write-Host "[AstrBot] Stop failed, port $astrbotPort still in use." -ForegroundColor Red
+    if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
+        Write-Host "[$Name] Stop failed, port $Port still in use." -ForegroundColor Red
     } else {
-        Write-Host '[AstrBot] Stopped.' -ForegroundColor Green
+        Write-Host "[$Name] Stopped." -ForegroundColor Green
     }
-} else {
-    Write-Host "[AstrBot] No process found listening on port $astrbotPort, may already be stopped." -ForegroundColor Cyan
 }
 
-# Stop NapCat + QQ (port 6099 + leftover QQ processes)
-$napcatPort = 6099
-$listening = Get-NetTCPConnection -LocalPort $napcatPort -State Listen -ErrorAction SilentlyContinue
-if ($listening) {
-    foreach ($c in $listening) {
-        $pid = $c.OwningProcess
-        Write-Host "[NapCat] Found process listening on port $napcatPort, PID=$pid, stopping..." -ForegroundColor Yellow
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-    }
-    Start-Sleep -Seconds 2
-}
+# Chat Shell sidecar (web UI + /v1 Agent API)
+Stop-ByPort -Port 8756 -Name 'Shell'
 
-$targets = Get-Process | Where-Object { $_.ProcessName -in @('QQ', 'NapCatWinBootMain') } | Select-Object -ExpandProperty Id -Unique
-foreach ($p in $targets) {
-    Write-Host "[NapCat] Ending leftover process PID=$p ..." -ForegroundColor Yellow
-    Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
-}
+# AstrBot (web UI + OneBot reverse WS)
+Stop-ByPort -Port 6185 -Name 'AstrBot'
 
-$still = Get-NetTCPConnection -LocalPort $napcatPort -State Listen -ErrorAction SilentlyContinue
-if ($still) {
-    Write-Host "[NapCat] Stop failed, port $napcatPort still in use." -ForegroundColor Red
-} else {
-    Write-Host '[NapCat] Stopped.' -ForegroundColor Green
+# NapCat (injected into QQ): stop the listener, then clean up leftover QQ processes it spawned.
+Stop-ByPort -Port 6099 -Name 'NapCat'
+
+$targets = Get-Process | Where-Object { $_.ProcessName -in @('QQ', 'NapCatWinBootMain') } |
+    Select-Object -ExpandProperty Id -Unique
+foreach ($procId in $targets) {
+    Write-Host "[NapCat] Ending leftover process PID=$procId ..." -ForegroundColor Yellow
+    Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host '' -ForegroundColor Cyan

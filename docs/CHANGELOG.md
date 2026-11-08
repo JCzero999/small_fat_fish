@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-11-08 — 运维修复：stop-all 停不掉 + 全量重启脚本
+
+> 只改脚本与文档，不动记忆内核；单测仍 316 项绿。
+
+- ✅ **真 bug**：`stop-all.ps1` 里 `$pid = $c.OwningProcess` 把值赋给了只读的自动变量 `$PID`，抛终止性错误，脚本在第一个 `Stop-Process` 之前就退出——「停止成功」是假象，AstrBot/QQ 一直活着；随后 `start-all.ps1` 因端口占用跳过启动，于是**改完代码重启后仍在跑旧进程**。改为 `$ownerPid`，并抽成 `Stop-ByPort` 复用
+- ✅ **新增 `scripts/restart-all.ps1` / `restart-all.bat`**：Shell(8756) → AstrBot(6185/6199) → NapCat/QQ(6099) 全量重启，逐项健康检查，末尾打印四端口、Web 地址与 shell token；`-SkipQQ` 只重启 Web 侧；`.bat` 可双击
+- ✅ `stop-all.ps1` 纳入 Shell 8756（此前只停 QQ 侧，网页端会继续跑旧代码）；`status-all.ps1` 端口清单加 8756，速查区补 restart
+- ✅ **运行时副本同步**：QQ 插件按自身工作目录读 `astrbot-runtime\config\user_config.json` 与 `persona\xiaotun_v1.md`，实测两份已分叉（runtime 缺 `tone`、缺 `identity.owner_accounts`、人设停在 11-05）——这正是「网页换了口吻、QQ 还是老样子」的原因。`restart-all.ps1` 启动前自动比对并覆盖（`.bak-<时间戳>` 备份），`-NoConfigSync` 可跳过
+- ✅ `docs/README.md`「启动项目」补 restart-all 用法与「start-all 不会重启已在跑的进程」提醒；HANDOVER 增坑 26（只读 `$pid`）、27（沙箱内 `Start-Process` 起的进程会被回收，需 explorer 执行 .bat）
+
+---
+
 ## 2026-11-07 — v0.13.4 统一人设 + 记忆使用规则（消掉「汇报感」） ✅
 
 > 按《小豚 v0.13.4 迭代方案》（方案文档内标题沿用 v0.13.1，实际版本号定为 **0.13.4**——0.13.1 已被「记忆互通」占用）。

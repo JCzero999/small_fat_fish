@@ -228,6 +228,9 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 23. **peer 文件名编码必须逐字一致**：`qq:FriendMessage:1975824324` → `qq_FriendMessage_1975824324-e46c8efb.db`（安全字符化 + md5 前 8 位，与插件 `_filename_for_peer` 一字不差）。Shell 或插件任一侧改了编码，就会各开一个空库——表现正是「网页里她不认识我」。核对 `/v1/health` 的 `peer_id` 与 `extra-brain/` 下真实文件名即可定位。
 24. **人设文件头会被注入（v0.13.4 已修）**：剥离函数原来只去 `#` 标题，文件头的 `>` 说明块（「结构按…规定」「硬上限…」）会被当成正文送进模型，而 QQ 插件从【你是谁】裁剪——两端 system prompt 不同，正是「两边气质分裂」的隐性来源。现在两端都按**行首** `【你是谁】` 裁剪；注意不能改成子串查找，说明文字里会提到这个锚点名。
 25. **注入脚注默认开**：`build_injection` 末尾的【使用约定】是 v0.13.4 的默认行为；写测试断言注入原文时要考虑它。要临时关闭：`ExtraBrain(memory_usage_footer=False)` 或 `user_config.tone.memory_usage_footer=false`。它追加在安全规范之后，是注入的最后一段。
+26. **`stop-all.ps1` 曾因 `$pid` 只读变量直接崩掉（2026-11-08 已修）**：老版本 `$pid = $c.OwningProcess` 赋值给 PowerShell 只读自动变量 `$PID`，抛终止性错误，脚本在第一个 `Stop-Process` 之前就退出——结果「stop-all 说停好了、其实 AstrBot/QQ 还活着」，接着 `start-all` 看到端口占用就跳过，**改了代码却仍在跑旧进程**。现在统一用 `$ownerPid`，并加了 `restart-all.ps1`（Shell 8756 + AstrBot + NapCat 全量重启，`-SkipQQ` 可只重启 Web 侧）。判断是否需要重启：`/v1/health` 的 `version` 与插件 `metadata.yaml` 的 `version`。
+27. **Agent 沙箱里 `Start-Process` 起的进程会被回收**：本机 Agent 的每条命令结束时会杀掉它的整个进程树，`schtasks` 也在黑名单里。要在会话里真正把服务拉起来（并让它活过命令结束），只能让 **explorer 去执行 `.bat`**（如 `explorer.exe scripts\restart-all.bat`），或由用户在自己的终端运行脚本。
+28. **QQ 读的是 runtime 副本，不是仓库那份**：插件按自身工作目录解析 `config/user_config.json` 与 `persona/xiaotun_v1.md`，实际命中的是 `D:\projects_software\astrbot-runtime\` 下的副本。2026-11-08 发现两份已悄悄分叉（runtime 缺 `tone`、缺 `identity.owner_accounts`、人设还是 11-05 旧版），表现为「网页端有新口吻、QQ 还是老样子」。现在 `restart-all.ps1` 每次启动前会比对并同步这两个资产（改动前自动 `.bak-<时间戳>` 备份）；手改配置/人设后直接跑它即可，不要只改仓库那份。
 
 ---
 

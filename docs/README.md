@@ -56,10 +56,14 @@ python -m extra_brain.server --data-dir extra-brain
 ```powershell
 cd D:\projects\small_fat_fish
 .\scripts\start-all.ps1 1178469499   # 一键拉起 AstrBot + NapCat（快速登录）
-.\scripts\status-all.ps1             # 随时查看三端口 / 进程 / 记忆库状态
-.\scripts\stop-all.ps1               # 停止全部
+.\scripts\restart-all.ps1            # 全量重启：Shell(8756) + AstrBot + NapCat/QQ
+.\scripts\status-all.ps1             # 随时查看四端口 / 进程 / 记忆库状态
+.\scripts\stop-all.ps1               # 停止全部（含 Shell 8756）
 ```
 
+- **改了 `src/extra_brain/` 或插件代码后，必须用 `restart-all.ps1`**：`start-all.ps1` 是「端口占用即跳过」的幂等启动，已经在跑的 AstrBot 不会被重启，旧代码会继续服务（Shell 8756 同理）。`restart-all.bat` 可双击运行，与 ps1 等价
+- **`restart-all.ps1` 会先同步运行时副本**：QQ 插件按自身工作目录读 `astrbot-runtime\config\user_config.json` 与 `astrbot-runtime\persona\xiaotun_v1.md`，不是仓库那份。脚本启动前比对并覆盖（自动 `.bak-<时间戳>` 备份），所以「改仓库配置/人设 → 重启」就是完整动作；`-NoConfigSync` 可跳过
+- `restart-all.ps1 -SkipQQ` 只重启 Web 侧（Shell + AstrBot），不动 QQ/NapCat
 - `start-all.ps1` 内置端口占用检查（已在跑则跳过）与启动后健康检查（等 6185/6099 监听，最长各 90s/60s），启动成败会明确报告
 - 启动成功后：AstrBot WebUI `http://127.0.0.1:6185`，NapCat WebUI `http://127.0.0.1:6099/webui`，QQ 消息经 OneBot 反向 WS（6199）接入 AstrBot
 - DeepSeek API Key 优先读 `config/user_config.json` 的 `api.api_key`，其次环境变量 `DEEPSEEK_API_KEY`
@@ -91,7 +95,7 @@ python scripts/shell_regression.py                     # Shell 六步真实 LLM 
 node scripts/shell_ui_smoke.js                         # 前端自动巩固状态机冒烟（无浏览器依赖）
 python scripts/persona_tone_check.py --static          # 人设唯一源 + 禁用套话静态检查（v0.13.4）
 curl http://127.0.0.1:8756/v1/health                   # Shell 存活检查（免鉴权，含自动巩固策略）
-.\scripts\status-all.ps1                               # QQ 链路三端口检查
+.\scripts\status-all.ps1                               # 四端口检查（8756 / 6185 / 6199 / 6099）
 ```
 
 ## 已实现
