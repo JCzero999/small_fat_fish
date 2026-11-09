@@ -42,6 +42,7 @@ import os
 import re
 import secrets
 import threading
+import time
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -57,6 +58,47 @@ from .models import MemoryValidationError, parse_iso8601
 
 _SHELL_STATIC_DIR = Path(__file__).resolve().parent / "static" / "shell"
 _PERSONA_MAX_CHARS = 3000
+
+# v0.13.5：让 Shell 进程向 Windows 声明「保持运行」。
+# 背景（2026-11-09 实测）：笔记本息屏 10 分钟后系统进入新型待机（Modern Standby），
+# Shell / AstrBot / NapCat 三个进程被整体冻结（16:17 因 Idle Timeout、18:18 因合盖，
+# 各冻约 56 分钟），期间 QQ 消息完全收不到，表现为「发两三次才回」。
+# powercfg 的「睡眠超时=0」挡不住由息屏触发的 Modern Standby，必须持有电源请求。
+_KEEP_AWAKE_ACTIVE = False
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+
+
+def _install_keep_awake(interval: float = 60.0) -> bool:
+    """请求系统保持唤醒（屏幕仍可息屏）。非 Windows / 已关闭 / 调用失败时返回 False。
+
+    开关：环境变量 ``SHELL_KEEP_AWAKE=0``（off/false/no 亦可）关闭。
+    只锁系统不锁屏幕——这是播放器「息屏不断播」的同一机制，不改变用户的息屏设置。
+    """
+    global _KEEP_AWAKE_ACTIVE
+    if os.name != "nt":
+        return False
+    flag = str(os.environ.get("SHELL_KEEP_AWAKE", "1")).strip().lower()
+    if flag in {"0", "off", "false", "no"}:
+        return False
+    try:
+        import ctypes  # noqa: PLC0415 - 仅 Windows 需要
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        flags = _ES_CONTINUOUS | _ES_SYSTEM_REQUIRED
+        if not kernel32.SetThreadExecutionState(flags):
+            return False
+
+        def _beat() -> None:  # 主线程意外退出时兜底续期
+            while True:
+                time.sleep(interval)
+                kernel32.SetThreadExecutionState(flags)
+
+        threading.Thread(target=_beat, name="keep-awake", daemon=True).start()
+        _KEEP_AWAKE_ACTIVE = True
+        return True
+    except Exception:  # pragma: no cover - 仅在异常环境触发
+        return False
 # v0.13.4：正文结构锚点（与 AstrBot 适配器一致，锚点之前的写作说明不注入）
 _PERSONA_ANCHOR = "【你是谁】"
 
@@ -342,6 +384,8 @@ class ExtraBrainServer:
             "data_dir": str(self.data_dir.resolve()),
             # v0.13.3：UI 据此决定自动巩固时机（触发在 shell 前端，语义不变）
             "auto_consolidate": self.shell.auto_consolidate_policy(),
+            # v0.13.5：是否已持有系统常驻请求（false 时段睡眠会把进程一起冻住）
+            "keep_awake": _KEEP_AWAKE_ACTIVE,
         }
 
     def check_shell_auth(self, headers: Mapping[str, str] | None) -> None:
@@ -1138,6 +1182,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if shell.token:
             print("打开网页后如提示 Token 未设置，把上面日志里的 token 粘贴进去即可（只需一次）")
     print(f"data dir: {Path(args.data_dir).resolve()}")
+    if _install_keep_awake():
+        print(
+            "keep-awake: 已请求系统保持运行（屏幕仍可息屏），避免息屏后进程被新型待机冻结"
+            "（SHELL_KEEP_AWAKE=0 可关闭）"
+        )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

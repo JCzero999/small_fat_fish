@@ -1,6 +1,6 @@
 # Extra Brain（额外大脑）
 
-依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.13.4**（统一人设与记忆使用规则：唯一人设源 + 注入【使用约定】，消掉「汇报记忆」口吻；此前 v0.13.3 自动巩固改版、v0.13.2 主人身份跨端识别、v0.13.0 独立 Chat 主场 + Agent API、v0.12.1 表达与人设层），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
+依据《长期记忆「额外大脑」架构规范 v0.9》实现的 Python 长期记忆库。面向陪伴型 Agent，重点是**少量、高相关、可解释、可遗忘**的记忆，而不是保存全部聊天原文。**当前版本 v0.13.5**（系统常驻：进程不再被息屏待机冻结，修掉「QQ 有的收不到 / 发几次才回」的主因；此前 v0.13.4 统一人设与记忆使用规则、v0.13.3 自动巩固改版、v0.13.2 主人身份跨端识别、v0.13.0 独立 Chat 主场 + Agent API、v0.12.1 表达与人设层），按 `MEMORY_ITERATION_PLAN.md` 吸收了 mnemovault 的双时态、六档处置、四路召回、陪伴层、主动开口与情感事件状态机（已接通抽取链路）设计。
 
 > **文档索引**：设计规范见 `长期记忆「额外大脑」架构规范 v0.9.md`（第 10 节为实现对照）；DSH 宿主接入与跨会话验证见 `HANDOVER.md`；变更记录见 `CHANGELOG.md`；DSH 插件细节见 `../dsh-plugin-extra-brain/README.md`；**AstrBot 挂载（QQ 通道）见 `../astrbot-plugin-extra-brain/README.md`；挂载到任意宿主的通用契约见 `MOUNT.md`；独立 Chat 主场契约见 `PRODUCT_NORTH.md` / `SHELL_API.md`；迭代路线图见 `MEMORY_ITERATION_PLAN.md`**。本文档位于 `docs/` 目录。
 
@@ -65,6 +65,7 @@ cd D:\projects\small_fat_fish
 - **`restart-all.ps1` 会先同步运行时副本**：QQ 插件按自身工作目录读 `astrbot-runtime\config\user_config.json` 与 `astrbot-runtime\persona\xiaotun_v1.md`，不是仓库那份。脚本启动前比对并覆盖（自动 `.bak-<时间戳>` 备份），所以「改仓库配置/人设 → 重启」就是完整动作；`-NoConfigSync` 可跳过
 - `restart-all.ps1 -SkipQQ` 只重启 Web 侧（Shell + AstrBot），不动 QQ/NapCat（NapCat 5s 自动重连）；双击版为 `restart-web.bat`。改了插件/cmd_config 后优先用它，避免频繁重登 QQ 加重风控
 - `start-all.ps1` 内置端口占用检查（已在跑则跳过）与启动后健康检查（等 6185/6099 监听，最长各 90s/60s），启动成败会明确报告
+- **别让机器睡过去**（v0.13.5）：笔记本息屏 10 分钟后会进入「新型待机」，Shell / AstrBot / NapCat 会被系统一起冻结，期间 QQ 消息完全收不到（表现为「发几次才回」）。现在 Shell 启动时会自己申请「系统保持运行」（只锁系统、屏幕照常息屏），`restart-all.ps1` 还会额外拉起 `scripts\keep-awake.ps1` 兜底；AC 下合盖也已设为不休眠。自检：`curl http://127.0.0.1:8756/v1/health` 里 `keep_awake` 应为 `true`
 - 启动成功后：AstrBot WebUI `http://127.0.0.1:6185`，NapCat WebUI `http://127.0.0.1:6099/webui`，QQ 消息经 OneBot 反向 WS（6199）接入 AstrBot
 - DeepSeek API Key 优先读 `config/user_config.json` 的 `api.api_key`，其次环境变量 `DEEPSEEK_API_KEY`
 - ⚠️ 坑位：NapCat 必须用 4.18.41（位于 `D:\projects_software\napcat\NapCat.52230.Shell`）；AstrBot 工作目录必须是 `D:\projects_software\astrbot-runtime`；记忆库数据统一在仓库 `D:\projects\small_fat_fish\extra-brain\`（2026-11-07 起，所有宿主挂载点都指向这里；原 `astrbot-runtime\data\extra_brain` 保留作备份），**不可重新初始化**
@@ -197,6 +198,7 @@ curl http://127.0.0.1:8756/v1/health                   # Shell 存活检查（�
 - **v0.13.2**：主人身份卡 `identity.owner_accounts` 写全局伴侣层 Core（永远在场）+ 群聊 `[发言者 QQ|昵称]` 标注
 - **v0.13.3**：记忆交互改版——主路径只聊天，自动巩固（切片 / 新会话 / 页面隐藏），手动能力收进「高级」抽屉
 - **v0.13.4**：统一人设与记忆使用规则——Shell/QQ 同一份正文（前置），注入末尾统一【使用约定】，禁止「我记着呢」式套话，新增 `scripts/persona_tone_check.py` 回归
+- **v0.13.5**：系统常驻——Shell 进程持有 `SetThreadExecutionState` 电源请求（只锁系统、屏幕照常息屏），AC 合盖不休眠，新增 `scripts/keep-awake.ps1` 守护；`/v1/health` 回 `keep_awake`。修掉息屏待机把 Shell/AstrBot/NapCat 一起冻结导致的「QQ 有的收不到」
 
 运行时只使用 Python 标准库，不依赖外部向量服务；加密、HNSW、真实嵌入全部可选。
 
@@ -932,9 +934,23 @@ Sidecar 端点：`GET /health` `/core` `/list` `/stats`（v0.3.0 分层统计）
 
 DSH 是 Developer Preview；AstrBot 为活跃维护的成熟框架（支持 QQ 等 15+ 平台）。完整安装与跨会话验证步骤见 `HANDOVER.md`，变更记录见 `CHANGELOG.md`。
 
+## 排查：QQ「有的收不到 / 发几次才回」
+
+按这个顺序查，基本能定位到层：
+
+| 现象 | 先查什么 | 结论 |
+|---|---|---|
+| 某段时间**整段没有回复**，之后突然恢复 | `Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Kernel-Power'; Id=506,507}` | 机器进过「新型待机」（息屏 10 分钟或合盖）。进程被整体冻结，消息既不收也不回；唤醒只回灌一批。看 `/v1/health` 的 `keep_awake` 是否为 `true`，`scripts\keep-awake.bat` 是否在跑 |
+| AstrBot 日志有一大段空白，且紧跟 `Event loop lag detected: NNNNs` | 对比 `NNNN` 与空档长度 | 同上，等于冻结时长；不是崩溃也不是卡死 |
+| 回复已生成但用户没收到 | `data/logs/astrbot.log` 找 `Prepare to send - 昵称/QQ号:` | 有这行 = 已交给平台；没有则是模型/管道层没产出 |
+| 发送走了 `send_message_to_user` 工具 | 会话历史里看 `tool_calls` | 该工具在 QQ 端会静默丢失（工具报成功、用户收不到），已由 `tool_policy.reply_rule` 禁止；若规则被清空会复发 |
+| 短时间大量消息没反应 | 单会话限流 `platform_settings.rate_limit`（默认 30 条 / 60 秒，`stall`） | 按会话计算，私聊基本碰不到；群聊刷屏时会被 stall 到下一个窗口 |
+
+补充：`powercfg /requests` 能看当前电源请求，但需要**管理员**终端；普通终端只会提示权限不足，不代表没有请求。
+
 ## 验证边界
 
-- **离线单测 316 项**（基础 / sidecar / v0.2–v0.13 各期特性：v2 全量、v11 53、v12 36、v121 5、v13 22、v132 10、v133 16、v134 14 等）：数据校验、持久化、空抽取与闲聊过滤、去重、冲突修正、七因子保留度与归档、保护与晋升、事务回滚、加权检索与四路召回、注入预算、跨会话情绪召回、人格锚回滚、感觉/工作记忆、只读模式、存储统计、陪伴层五表 CRUD、主动开口决策矩阵、加密密文断言、HNSW 召回、遗忘链路（P1/P0）、情感事件状态机集成（默认 open / 显式推进 / 非法迁移拒绝 / 反漠视不归档 / schema 校验）、sidecar HTTP（per-peer 隔离、错误码、只读降级、/stats、/forget）。Python 3.11/3.12 双版本 CI 全绿（GitHub Actions）。
+- **离线单测 324 项**（基础 / sidecar / v0.2–v0.13 各期特性：v2 全量、v11 53、v12 36、v121 5、v13 22、v132 10、v133 16、v134 14、v135 8 等）：数据校验、持久化、空抽取与闲聊过滤、去重、冲突修正、七因子保留度与归档、保护与晋升、事务回滚、加权检索与四路召回、注入预算、跨会话情绪召回、人格锚回滚、感觉/工作记忆、只读模式、存储统计、陪伴层五表 CRUD、主动开口决策矩阵、加密密文断言、HNSW 召回、遗忘链路（P1/P0）、情感事件状态机集成（默认 open / 显式推进 / 非法迁移拒绝 / 反漠视不归档 / schema 校验）、sidecar HTTP（per-peer 隔离、错误码、只读降级、/stats、/forget）。Python 3.11/3.12 双版本 CI 全绿（GitHub Actions）。
 - **向后兼容**：v0.5.0 代码以只读方式完整加载 AstrBot 运行期的旧 `.db`（QQ 15 条 + WebChat 1 条）验证通过，新字段全部缺省安全，无需迁移。
 - **端到端**：AstrBot + WebChatUI 跨会话暗号、AstrBot + QQ 跨上下文暗号均验证通过；v0.5.0 重启后在真实 QQ 库上「新增暗号写入 + 跨 reset 召回 + 旧记忆零丢失」四步回归通过，七因子分档在真实数据上生效（高激活记忆落 P5，新写入落 P4）。
 

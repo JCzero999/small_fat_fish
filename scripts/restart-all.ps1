@@ -1,4 +1,4 @@
-# Restart-all: stop AstrBot + NapCat/QQ + Chat Shell, then start them again.
+﻿# Restart-all: stop AstrBot + NapCat/QQ + Chat Shell, then start them again.
 # Order matters: stop first (ports must be free), then shell (8756), then AstrBot (6185/6199), then NapCat (6099).
 # Why a separate script: start-all.ps1 only covers AstrBot + NapCat; the Chat Shell sidecar (8756) was
 # historically started by hand, so a "full restart" used to forget it and keep serving stale code.
@@ -13,7 +13,8 @@
 param(
     [string]$QQNumber = '1178469499',
     [switch]$SkipQQ,
-    [switch]$NoConfigSync
+    [switch]$NoConfigSync,
+    [switch]$NoKeepAwake
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -87,6 +88,39 @@ function Wait-PortListening {
     return $false
 }
 
+# 2026-11-09：笔记本息屏 10 分钟后 Windows 进入「新型待机」，三个进程被整体冻结
+# （实测 16:17 因 Idle Timeout、18:18 因合盖，各冻 56 分钟），期间 QQ 消息全收不到。
+# powercfg 的「睡眠超时=0」挡不住由息屏触发的 Modern Standby，必须用电源请求锁住系统。
+function Start-KeepAwake {
+    param([switch]$Skip)
+    if ($Skip) {
+        Write-Host '[keep-awake] skipped (-NoKeepAwake).' -ForegroundColor DarkGray
+        return
+    }
+    $running = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*keep-awake.ps1*' }
+    if ($running) {
+        Write-Host "[keep-awake] already running (PID=$($running[0].ProcessId))." -ForegroundColor Green
+        return
+    }
+    $script = Join-Path $PSScriptRoot 'keep-awake.ps1'
+    if (-not (Test-Path $script)) {
+        Write-Host "[keep-awake] script missing: $script" -ForegroundColor Yellow
+        return
+    }
+    Start-Process -FilePath 'powershell.exe' `
+        -ArgumentList @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', $script) `
+        -WindowStyle Hidden | Out-Null
+    Start-Sleep -Seconds 1
+    $ok = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*keep-awake.ps1*' }
+    if ($ok) {
+        Write-Host "[keep-awake] started (PID=$($ok[0].ProcessId)) - system stays awake while screen may sleep." -ForegroundColor Green
+    } else {
+        Write-Host '[keep-awake] WARNING: not running; QQ may go offline when the screen turns off.' -ForegroundColor Red
+    }
+}
+
 function Stop-ByPort {
     param([int]$Port, [string]$Name)
     $conns = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
@@ -122,6 +156,8 @@ Write-Host ''
 Write-Host '=== 2/3 Start Shell (web) ===' -ForegroundColor Cyan
 
 if (-not $NoConfigSync) { Sync-RuntimeAssets }
+
+Start-KeepAwake -Skip:$NoKeepAwake
 
 if (Test-Path $py) {
     $shellCmd = '/c chcp 65001 >nul && title Chat Shell :8756 && "' + $py + '" -m extra_brain.server --data-dir extra-brain'

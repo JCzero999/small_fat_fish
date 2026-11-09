@@ -176,7 +176,10 @@ class ShellPersonaTests(unittest.TestCase):
 
 class VersionTests(unittest.TestCase):
     def test_version_is_0134(self) -> None:
-        self.assertEqual(__version__, "0.13.4")
+        # v0.13.5 起版本号继续上走：断言「不低于 0.13.4」，避免每次发版都改这条
+        self.assertGreaterEqual(
+            tuple(int(p) for p in __version__.split(".")[:3]), (0, 13, 4)
+        )
 
 
 if __name__ == "__main__":

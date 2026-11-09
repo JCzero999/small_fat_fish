@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-11-09 — v0.13.5 进程被系统待机冻结（「有的收不到」的真正主因）
+
+> 只改 Shell 进程行为与运维脚本；记忆语义零改动，单测 324 项绿。
+
+**现象**：工具发送已禁用（上一条），但 QQ 仍偶发「发了没回 / 发两三次才回」。
+
+**证据链（Windows 事件日志 + AstrBot 日志对齐）**：
+
+| 时间 | 事件 |
+|---|---|
+| 16:17:14 | `Kernel-Power 506` 系统进入**新型待机（Modern Standby）**，原因 `Idle Timeout`（屏幕 10 分钟息屏触发，`VIDEOIDLE=600s`） |
+| 18:18:49 | 再次进入新型待机，原因 `Lid`（合盖） |
+| 18:18 → 19:14 | AstrBot 日志**整段空白 56 分钟**；`extra-brain` 主动开口轮询（每 10 分钟）也全部缺席 |
+| 19:14:49 | `Event loop lag detected: 3351.203s`——正好等于冻结时长 |
+| 19:14:50 | `Kernel-Power 507` 退出待机，原因 `Lid` |
+| 19:14:54 | 十几个群的几百条消息在 2 秒内涌回（离线积压回灌） |
+
+结论：**不是消息丢了，是三个进程一起被系统挂起了**。待机期间 QQ 消息既不收也不回；唤醒后只能拿到回灌的一批，用户此前的消息永久缺失，观感就是「发几次才回」。此前排查的「工具发送静默丢失」是另一条独立问题（已禁），两者叠加才显得特别难猜。
+
+- ✅ **Shell 持有电源请求**：`server._install_keep_awake()` 调用 `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)`，主线程 + 60s 续期守护线程；**只锁系统、不锁屏幕**（屏幕照常息屏，但不再挂起）。`SHELL_KEEP_AWAKE=0` 可关；`/v1/health` 新增 `keep_awake` 字段，一眼可见是否生效
+- ✅ **交流电合盖不休眠**：`powercfg setacvalueindex LIDACTION 0`（DC 仍保持睡眠，省电不变）
+- ✅ **独立守护脚本**：`scripts/keep-awake.ps1` + `keep-awake.bat`（双击即用，已运行则不重复启动）；`restart-all.ps1` 每次启动自动拉起，`-NoKeepAwake` 可跳过
+- ✅ **踩坑记录**：PowerShell 5.1 按 ANSI 读无 BOM 的 UTF-8 脚本，中文注释会「吃掉」其后 ASCII 字符导致语法错误——`restart-all.ps1` / `keep-awake.ps1` 已加 BOM，并有测试守住
+- ✅ 测试：`tests/test_v135_features.py` 8 项（开关语义、健康字段、脚本存在性、**BOM 必须是 EF BB BF**、restart-all 接线）；全量 **324 项 OK（2 skipped）**；版本 `0.13.5`
+
+**注意**：`powercfg /requests` 需要管理员权限，普通终端查不到请求；验证方式见 README 排查表。
+
+---
+
 ## 2026-11-09 — QQ「发两三次才回」排查 + 工具发送禁用
 
 > 只改插件与配置；记忆内核零改动，单测仍 316 项绿。

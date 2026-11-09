@@ -23,10 +23,11 @@
 ```json
 {
   "ok": true,
-  "version": "0.13.4",
+  "version": "0.13.5",
   "peer_id": "local-main",
   "read_write": true,
   "data_dir": "D:\\projects\\small_fat_fish\\extra-brain",
+  "keep_awake": true,
   "auto_consolidate": {
     "enabled": true,
     "every_n_user_messages": 8,
@@ -38,6 +39,8 @@
 ```
 
 `read_write=false` 表示未配置 API Key 或服务以只读模式运行（chat/consolidate 将 503），读取端点不受影响。
+
+`keep_awake`（v0.13.5）：服务是否已向 Windows 申请「系统保持运行」（`SetThreadExecutionState(ES_CONTINUOUS|ES_SYSTEM_REQUIRED)`，只锁系统、屏幕照常息屏）。为 `false` 时，息屏 10 分钟后的新型待机会把 Shell / AstrBot / NapCat 一起冻结，QQ 消息将完全收不到；`SHELL_KEEP_AWAKE=0` 可显式关闭，非 Windows 恒为 `false`。**该字段只反映本进程的请求**，与 `scripts/keep-awake.ps1` 守护互不依赖。
 
 `auto_consolidate` 是**下发策略**：巩固的**触发在 shell 前端**（攒满 N 条 / 开新会话 / 页面隐藏时，把未巩固切片 POST 到
 `/v1/consolidate`），服务端不会自己定时巩固，因此不会出现双重写入。策略来源优先级：`SHELL_AUTO_CONSOLIDATE_*`

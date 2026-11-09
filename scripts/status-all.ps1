@@ -1,4 +1,4 @@
-# Status-all: show Chat Shell + AstrBot + NapCat running status.
+﻿# Status-all: show Chat Shell + AstrBot + NapCat running status.
 # Lists listening ports, related processes, and memory DB files.
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -21,6 +21,27 @@ Write-Host '=== Related Processes ===' -ForegroundColor Cyan
 Get-Process | Where-Object { $_.ProcessName -in @('python', 'astrbot', 'QQ', 'NapCatWinBootMain') } |
     Select-Object Id, ProcessName, @{N='CPU(s)';E={$_.CPU}}, @{N='PM(MB)';E={[math]::Round($_.PM / 1MB, 1)}} |
     Format-Table -AutoSize
+
+Write-Host '' -ForegroundColor Cyan
+Write-Host '=== Keep Awake (v0.13.5) ===' -ForegroundColor Cyan
+# 休眠会把 Shell / AstrBot / NapCat 一起冻结，期间 QQ 消息完全收不到
+try {
+    $h = Invoke-RestMethod -Uri 'http://127.0.0.1:8756/v1/health' -TimeoutSec 5
+    if ($h.keep_awake) {
+        Write-Host '  keep_awake: true (service holds ES_SYSTEM_REQUIRED)' -ForegroundColor Green
+    } else {
+        Write-Host '  keep_awake: false - screen-off standby may freeze the bot!' -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host '  health endpoint unreachable (Shell not running?)' -ForegroundColor Yellow
+}
+$ka = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like '*keep-awake.ps1*' }
+if ($ka) {
+    Write-Host "  guard script: running (PID=$($ka[0].ProcessId))" -ForegroundColor Green
+} else {
+    Write-Host '  guard script: not running (run scripts\keep-awake.bat)' -ForegroundColor DarkGray
+}
 
 Write-Host '' -ForegroundColor Cyan
 Write-Host '=== Memory DB ===' -ForegroundColor Cyan
