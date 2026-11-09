@@ -36,7 +36,17 @@
     "_comment": "v0.13.4 语气约定：memory_usage_footer=注入末尾追加【使用约定】脚注（默认开，Shell/QQ 同源）；forbid_memory_flex/banned_phrases 供回归脚本检测证明式套话。",
     "memory_usage_footer": true,
     "forbid_memory_flex": true,
-    "banned_phrases": ["我记着呢", "我记得很清楚", "这个我还能记错", "我不会忘", "我怎么可能忘"]
+    "banned_phrases": [
+      "我记着呢",
+      "我记得很清楚",
+      "这个我还能记错",
+      "我不会忘",
+      "我怎么可能忘"
+    ]
+  },
+  "tool_policy": {
+    "_comment": "v0.13.4.1 回复投递策略：QQ 端 send_message_to_user 工具发送会静默丢失（工具报成功、用户收不到，2026-11-09 实测 3/3 丢失，普通回复全部可达），普通回复一律直出文本。reply_rule 置空串可关闭。",
+    "reply_rule": "【回复方式（硬规则）】在本会话回复时直接输出文本，禁止调用 send_message_to_user 发送纯文本——该工具的发送在本环境会静默丢失，对方收不到。只有定时任务、主动开口这类没有用户消息可回的场景才允许用它。如果对方说没收到你上一条消息，直接把内容重新输出一遍，不要改用工具。"
   },
   "shadow_mode": false,
   "shell": {

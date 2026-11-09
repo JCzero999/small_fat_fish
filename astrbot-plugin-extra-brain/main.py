@@ -813,6 +813,18 @@ class ExtraBrainPlugin(star.Star):
         if self._persona_text:
             req.system_prompt = self._swap_persona(req.system_prompt)
 
+        # v0.13.4.1：回复投递策略。2026-11-09 实测：QQ 端 send_message_to_user
+        # 工具发送在 NapCat/QQ 层静默丢失（工具报成功、用户收不到，3/3 丢失），
+        # 而普通文本回复全部可达。普通回复一律直出文本，工具只留给定时任务等
+        # 无用户消息可回的场景。reply_rule 设为空串可关闭该约束。
+        reply_rule = (self._user_config.get("tool_policy") or {}).get("reply_rule")
+        if reply_rule:
+            req.system_prompt = (
+                f"{req.system_prompt}\n\n{reply_rule}"
+                if req.system_prompt
+                else str(reply_rule)
+            )
+
         # v0.13.2：群聊消息标注发言者（检索 query 与巩固缓冲共用同一标注文本）
         tagged = self._tag_sender(event, prompt) if prompt else prompt
 

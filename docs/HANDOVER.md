@@ -231,6 +231,7 @@ NapCat 由同一个脚本顺带启动，机器人 QQ 号 `1178469499`，WebUI `h
 26. **`stop-all.ps1` 曾因 `$pid` 只读变量直接崩掉（2026-11-08 已修）**：老版本 `$pid = $c.OwningProcess` 赋值给 PowerShell 只读自动变量 `$PID`，抛终止性错误，脚本在第一个 `Stop-Process` 之前就退出——结果「stop-all 说停好了、其实 AstrBot/QQ 还活着」，接着 `start-all` 看到端口占用就跳过，**改了代码却仍在跑旧进程**。现在统一用 `$ownerPid`，并加了 `restart-all.ps1`（Shell 8756 + AstrBot + NapCat 全量重启，`-SkipQQ` 可只重启 Web 侧）。判断是否需要重启：`/v1/health` 的 `version` 与插件 `metadata.yaml` 的 `version`。
 27. **Agent 沙箱里 `Start-Process` 起的进程会被回收**：本机 Agent 的每条命令结束时会杀掉它的整个进程树，`schtasks` 也在黑名单里。要在会话里真正把服务拉起来（并让它活过命令结束），只能让 **explorer 去执行 `.bat`**（如 `explorer.exe scripts\restart-all.bat`），或由用户在自己的终端运行脚本。
 28. **QQ 读的是 runtime 副本，不是仓库那份**：插件按自身工作目录解析 `config/user_config.json` 与 `persona/xiaotun_v1.md`，实际命中的是 `D:\projects_software\astrbot-runtime\` 下的副本。2026-11-08 发现两份已悄悄分叉（runtime 缺 `tone`、缺 `identity.owner_accounts`、人设还是 11-05 旧版），表现为「网页端有新口吻、QQ 还是老样子」。现在 `restart-all.ps1` 每次启动前会比对并同步这两个资产（改动前自动 `.bak-<时间戳>` 备份）；手改配置/人设后直接跑它即可，不要只改仓库那份。
+29. **`send_message_to_user` 工具发送在 QQ 端静默丢失（2026-11-09 已隔离）**：工具报「Message sent」但用户收不到（实测 3/3 丢失），普通文本回复全部可达；还会延迟送达且不回写会话历史。AstrBot 侧两条路径调用完全相同的 NapCat API，丢失发生在 QQ 层（疑似机器人账号风控）。对策：插件在 system prompt 追加 `tool_policy.reply_rule` 禁止用工具发普通回复（cron 执行器不触发 `OnLLMRequestEvent`，主动开口不受影响）；AstrBot `log_file_enable=true`、NapCat `fileLog=true` 已开，复发时看 `data/logs/astrbot.log` 与 `napcat/logs/`。别频繁重启 QQ——重登次数越多风控越紧。
 
 ---
 

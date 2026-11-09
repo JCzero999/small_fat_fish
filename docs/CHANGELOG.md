@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-11-09 — QQ「发两三次才回」排查 + 工具发送禁用
+
+> 只改插件与配置；记忆内核零改动，单测仍 316 项绿。
+
+**现象**：QQ 私聊有时发两三次才得到回复。翻 `data_v4.db` 的会话历史拿到硬证据（2026-11-09 13:15–13:27 一段）：
+
+- 会话历史里 `send_message_to_user` 工具调用共 **47 次、0 次报错**，但用户实测**工具发的消息全部没收到**（13:15–13:17 连发 3 条全部丢失，小豚自己也说「这两天试那么多次全弹回来」）
+- **普通文本回复全部可达**（13:17 实验对照：直接回复立刻收到）
+- 有一条不在会话历史里的消息「怎么会呢」出现在用户 QQ 上（引用的是「皑怖-柏柯瑞」）——说明工具发送还会**延迟送达**，且不回写历史
+
+**结论**：AstrBot 侧两条发送路径（普通回复 vs 工具 `send_message_to_user`）最终调用的是完全相同的 NapCat `send_private_msg`，AstrBot 无吞消息逻辑；丢失/延迟发生在 NapCat/QQ 层，最可能是 QQ 对机器人账号的风控（自动化消息延迟/丢弃）。模型之所以会用工具发普通回复，是因为会话历史里积了 47 条 cron 用工具发送的样本，few-shot 污染。
+
+- ✅ **插件新增回复投递策略**（`on_llm_request`）：在 system prompt 末尾追加 `tool_policy.reply_rule`——「本会话回复直接输出文本，禁止用 send_message_to_user 发纯文本；只有定时任务/主动开口等无用户消息场景才允许」。已核实 cron 执行器不触发 `OnLLMRequestEvent` 钩子，主动开口不受影响；`reply_rule` 置空串可关闭
+- ✅ **配置**：`user_config.json(.template)` 新增 `tool_policy` 块
+- ✅ **开日志拿证据**：AstrBot `log_file_enable=true`（`data/logs/astrbot.log`，已验证落盘）；NapCat `fileLog=true`（下次 QQ 重启生效，`napcat/logs/`）——再复发可直接看发送 API 的真实返回
+- ✅ **新增 `scripts/restart-web.bat`**：只重启 Shell(8756) + AstrBot（QQ 不重登，NapCat 5s 自动重连），避免频繁 QQ 重登加重风控
+
+---
+
 ## 2026-11-08 — 运维修复：stop-all 停不掉 + 全量重启脚本
 
 > 只改脚本与文档，不动记忆内核；单测仍 316 项绿。

@@ -63,7 +63,7 @@ cd D:\projects\small_fat_fish
 
 - **改了 `src/extra_brain/` 或插件代码后，必须用 `restart-all.ps1`**：`start-all.ps1` 是「端口占用即跳过」的幂等启动，已经在跑的 AstrBot 不会被重启，旧代码会继续服务（Shell 8756 同理）。`restart-all.bat` 可双击运行，与 ps1 等价
 - **`restart-all.ps1` 会先同步运行时副本**：QQ 插件按自身工作目录读 `astrbot-runtime\config\user_config.json` 与 `astrbot-runtime\persona\xiaotun_v1.md`，不是仓库那份。脚本启动前比对并覆盖（自动 `.bak-<时间戳>` 备份），所以「改仓库配置/人设 → 重启」就是完整动作；`-NoConfigSync` 可跳过
-- `restart-all.ps1 -SkipQQ` 只重启 Web 侧（Shell + AstrBot），不动 QQ/NapCat
+- `restart-all.ps1 -SkipQQ` 只重启 Web 侧（Shell + AstrBot），不动 QQ/NapCat（NapCat 5s 自动重连）；双击版为 `restart-web.bat`。改了插件/cmd_config 后优先用它，避免频繁重登 QQ 加重风控
 - `start-all.ps1` 内置端口占用检查（已在跑则跳过）与启动后健康检查（等 6185/6099 监听，最长各 90s/60s），启动成败会明确报告
 - 启动成功后：AstrBot WebUI `http://127.0.0.1:6185`，NapCat WebUI `http://127.0.0.1:6099/webui`，QQ 消息经 OneBot 反向 WS（6199）接入 AstrBot
 - DeepSeek API Key 优先读 `config/user_config.json` 的 `api.api_key`，其次环境变量 `DEEPSEEK_API_KEY`
